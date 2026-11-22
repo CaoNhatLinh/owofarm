@@ -1,0 +1,6 @@
+-r requirements.txt
+numpy
+pillow
+playsound3
+plyer
+psutil
