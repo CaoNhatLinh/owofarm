@@ -129,12 +129,14 @@ def account_credentials():
     if request.content_length and request.content_length > 4096:
         return jsonify(status="error", message="Dữ liệu quá dài."), 413
     try:
+        channel_applied = False
         if request.method == "PUT":
-            account_setup.save(request.get_json(silent=True))
+            channel_applied = account_setup.save(request.get_json(silent=True))
         accounts = account_setup.read_accounts()
         single = accounts[0] if len(accounts) == 1 else ["", ""]
         response = jsonify(status="success", token=single[0], channelId=single[1],
                            multiple=len(accounts) > 1,
+                           channelApplied=channel_applied,
                            restartRequired=account_setup.PENDING_PATH.exists())
         response.headers["Cache-Control"] = "no-store"
         return response

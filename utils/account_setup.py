@@ -41,9 +41,19 @@ def validate(data):
 def save(data):
     token, channel = validate(data)
     with _lock:
+        from utils import bot_control
+        accounts = read_accounts()
         # A single-account form must not silently delete other configured accounts.
-        if len(read_accounts()) > 1:
+        if len(accounts) > 1:
             raise ValueError("File có nhiều tài khoản. Hãy sửa tokens.txt trực tiếp để giữ đủ tài khoản.")
+        live_channel_change = bool(
+            accounts and token == accounts[0][0]
+            and not PENDING_PATH.exists()
+            and any(runtime.get("accountId") for runtime in bot_control.get_runtimes())
+        )
+        if live_channel_change:
+            # Reject inaccessible channels before replacing the saved account file.
+            bot_control.validate_channel(channel)
         descriptor, name = tempfile.mkstemp(prefix=".account-", suffix=".tmp", dir=ROOT)
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
@@ -52,7 +62,17 @@ def save(data):
             os.replace(name, TOKENS_PATH)
         finally:
             Path(name).unlink(missing_ok=True)
+        applied = False
+        if live_channel_change:
+            try:
+                bot_control.update_settings({"channelId": channel})
+                PENDING_PATH.unlink()
+                applied = True
+            except OSError:
+                # Credentials are saved. Keep the marker so restart adopts their channel.
+                pass
         changed.set()
+        return applied
 
 
 def for_startup():

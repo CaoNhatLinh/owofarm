@@ -15,7 +15,7 @@ Không cần Node.js, Docker, Visual Studio Code hay cài MySQL. Dữ liệu dù
 2. Trong thư mục vừa giải nén, bấm đúp **install.bat**. Đợi thông báo Installed. Trình cài tạo `.venv`, cài thư viện, sao chép cấu hình mẫu còn thiếu; không tự chạy bot.
 3. Bấm đúp **start.bat**. Giữ cửa sổ CMD mở, vào http://127.0.0.1:1200. Không cần mật khẩu web.
 4. Vào **Điều khiển → Tài khoản Discord**, nhập token và ID kênh, bấm **Lưu tài khoản**. Khi chưa có tài khoản, bot tự kết nối sau khi lưu. Có nút **Hiện token / Ẩn token**, cho phép xem lại và sửa token đã lưu.
-5. Nếu thay token khi bot đang kết nối tài khoản cũ, lưu xong hãy nhấn Ctrl+C trong CMD rồi chạy `start.bat` lại. Lưu không tự ngắt ván đang chơi.
+5. Nếu giữ nguyên token và chỉ đổi ID kênh khi đã kết nối, Lưu tài khoản sẽ kiểm tra quyền rồi chuyển kênh ngay. Nếu thay token khi bot đang kết nối tài khoản cũ, lưu xong hãy nhấn Ctrl+C trong CMD rồi chạy `start.bat` lại. Lưu không tự ngắt ván đang chơi.
 6. Kiểm tra prefix ở tab Điều khiển cho đúng server: `o` gửi `oh`; `owo ` có dấu cách cuối gửi `owo h`. ID kênh cho tài khoản được dùng khi kết nối; ô đổi kênh của bot dùng để chuyển kênh trong lúc chạy.
 
 Token chỉ lưu ở `tokens.txt` trên máy, không gửi vào chat hay GitHub. Bạn cũng có thể sửa file trực tiếp theo dạng `TOKEN ID_KENH`, mỗi tài khoản một dòng. Form web hỗ trợ một tài khoản; nếu file có nhiều tài khoản thì sửa file trực tiếp để giữ đủ các tài khoản.
