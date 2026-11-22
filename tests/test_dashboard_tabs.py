@@ -30,7 +30,7 @@ class DashboardLayoutTests(unittest.TestCase):
         self.assertEqual(set(layout.tabs),{"overview","controls","gambling","simulation","inventory","collection","activity"})
         self.assertTrue(all(count==1 for count in Counter(layout.ids).values()))
         expected={"overview":["bot-status","cowoncy_earnings","weekly_runtimes","total_commands"],
-                  "controls":["rest-enabled","message-interval","owo-enabled","hunt-enabled","battle-enabled","gem-order","channel-id","command-prefix"],
+                  "controls":["rest-enabled","message-interval","owo-enabled","hunt-enabled","battle-enabled","gems-enabled","gem-order","channel-id","command-prefix"],
                   "gambling":["coinflip-bet","coinflip-side","coinflip-switch-start","coinflip-probe-target","coinflip-history-window","coinflip-frequency-heads","coinflip-frequency-tails","coinflip-recent-frequency-heads","coinflip-recent-frequency-tails","slots-enabled","blackjack-double","gamble_earnings"],
                   "inventory":["sell-weapons","sell-animals","sacrifice-animals"],
                   "simulation":["sim-run","sim-base","sim-chart","sim-rows","sim-fill"],

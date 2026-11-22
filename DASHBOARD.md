@@ -152,3 +152,7 @@ Mô phỏng thêm switchHeads/switchTails × cố định/gấp đôi, tổng 20
 ### Bật/tắt hunt và battle riêng
 
 Tab Điều khiển có hai công tắc huntEnabled và battleEnabled (mặc định bật, như cấu hình hiện có). Lưu để áp dụng, giữ qua khởi động lại. Nhãn lệnh theo prefix đang nhập, mặc định oh/ob. Tắt dọn queue/check thử lại và chặn ở hàng đợi, trước khi gửi tin nhắn và trước lệnh slash. Kết quả của lệnh đã gửi vẫn được xử lý. Bật lại tạo lịch cho đúng lệnh, giữ cơ chế Dừng/CAPTCHA/nghỉ và khoảng chờ hiện tại. Không điều khiển HuntBot. Hai công tắc áp dụng chung tài khoản trên dashboard.
+
+## Bật/tắt dùng gem
+
+Điều khiển → Tự dùng gem → Lưu thay đổi. Tắt sẽ chặn lệnh dùng gem mới và loại lệnh gem đang đợi; không xoá hiệu lực gem đã kích hoạt trong OwO. Bật lại có hiệu lực trong lúc chạy. Thứ tự và độ hiếm được phép dùng vẫn giữ nguyên.

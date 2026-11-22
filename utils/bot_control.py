@@ -14,7 +14,7 @@ _lock = RLock()
 SETTINGS_PATH = Path(__file__).resolve().parents[1] / "config" / "dashboard.json"
 DEFAULTS = dict(restEnabled=True, failureThreshold=3, restMinutes=10,
                 responseTimeout=20, messageInterval=4.0, owoEnabled=True, huntEnabled=True, battleEnabled=True,
-                channelId="", prefix="o", gemOrder="low_to_high",
+                channelId="", prefix="o", gemOrder="low_to_high", gemsEnabled=True,
                 coinflipEnabled=False, slotsEnabled=False, blackjackEnabled=False,
                 coinflipBet=200, slotsBet=200, blackjackBet=200, coinflipSide="heads", coinflipHistoryWindow=500, coinflipProbeTarget="heads", coinflipSwitchStart="heads",
                 coinflipDoubleOnLoss=True, slotsDoubleOnLoss=True, blackjackDoubleOnLoss=True,
@@ -31,7 +31,7 @@ def validate_settings(values):
         raise ValueError("Cấu hình không hợp lệ.")
     result = {}
     for key, value in values.items():
-        if key in ("restEnabled", "owoEnabled", "huntEnabled", "battleEnabled", "coinflipEnabled", "slotsEnabled", "blackjackEnabled",
+        if key in ("restEnabled", "owoEnabled", "huntEnabled", "battleEnabled", "gemsEnabled", "coinflipEnabled", "slotsEnabled", "blackjackEnabled",
                    "coinflipDoubleOnLoss", "slotsDoubleOnLoss", "blackjackDoubleOnLoss", "gambleGoalEnabled", "gambleLossEnabled"):
             if type(value) is not bool:
                 raise ValueError("Công tắc phải là true hoặc false.")

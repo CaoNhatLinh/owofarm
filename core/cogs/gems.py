@@ -140,6 +140,9 @@ class Gems(BaseCog):
         }
 
     async def use_gems(self, available_gems, gems_in_use=None, full=False):
+        from utils.gem_control import enabled
+        if not enabled():
+            return
         if not full:
             result = self.find_specific_gems_to_use(gems_in_use, available_gems)
         else:
@@ -293,6 +296,9 @@ class Gems(BaseCog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
+        from utils.gem_control import enabled
+        if not enabled():
+            return
         nick = self.bot.get_nick(message)
         if (
             message.channel.id != self.bot.channel_id

@@ -10,6 +10,9 @@ COG_NAMES = dict(coinflip="Coinflip", slots="Slots", blackjack="Blackjack")
 
 
 def enabled(game):
+    if game == "gems":
+        from utils.gem_control import enabled as gems_enabled
+        return gems_enabled()
     if game in ("hunt", "battle"):
         from utils.farm_control import enabled as farm_enabled
         return farm_enabled(game)
@@ -17,6 +20,9 @@ def enabled(game):
 
 
 def command_allowed(message, prefix, aliases):
+    from utils.gem_control import command_allowed as gems_allowed
+    if not gems_allowed(message, prefix, aliases):
+        return False
     from utils.farm_control import command_allowed as farm_allowed
     if not farm_allowed(message, prefix, aliases):
         return False

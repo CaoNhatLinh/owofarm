@@ -36,7 +36,7 @@ function formValues() {
         messageInterval:Number($("message-interval").value), owoEnabled:$("owo-enabled").checked,
         huntEnabled:$("hunt-enabled").checked, battleEnabled:$("battle-enabled").checked,
         channelId:$("channel-id").value.trim(), prefix:$("command-prefix").value,
-        gemOrder:$("gem-order").value, gambleGoalEnabled:$("gamble-goal-enabled").checked,
+        gemOrder:$("gem-order").value, gemsEnabled:$("gems-enabled").checked, gambleGoalEnabled:$("gamble-goal-enabled").checked,
         gambleGoalAmount:Number($("gamble-goal-amount").value),
         gambleLossEnabled:$("gamble-loss-enabled").checked, gambleLossAmount:Number($("gamble-loss-amount").value), coinflipEnabled:$("coinflip-enabled").checked,
         slotsEnabled:$("slots-enabled").checked, blackjackEnabled:$("blackjack-enabled").checked,
@@ -185,6 +185,7 @@ function loadSettings(config) {
     $("channel-id").value = config.channelId || "";
     $("command-prefix").value = config.prefix;
     $("gem-order").value = config.gemOrder;
+    $("gems-enabled").checked = config.gemsEnabled !== false;
     $("coinflip-side").value = config.coinflipSide || "heads";
     $("coinflip-probe-target").value = config.coinflipProbeTarget || "heads";
     $("coinflip-switch-start").value = config.coinflipSwitchStart || "heads";

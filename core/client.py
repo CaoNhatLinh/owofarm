@@ -229,8 +229,9 @@ class MyClient(commands.Bot):
             raise ValueError("Discord chưa kiểm tra được kênh. Hãy thử lại sau.") from None
 
     async def apply_dashboard_settings(self):
-        from utils import gambling_control, farm_control
+        from utils import gambling_control, farm_control, gem_control
         await farm_control.sync(self)
+        await gem_control.sync(self)
         await gambling_control.sync(self)
         import time as monotime
         settings = bot_control.get_settings()
@@ -427,6 +428,8 @@ class MyClient(commands.Bot):
             apply_flags(self)
             from utils.farm_control import apply_flags as apply_farm_flags
             apply_farm_flags(self)
+            from utils.gem_control import apply_flags as apply_gem_flags
+            apply_gem_flags(self)
             await self.start_cogs()
 
     @suppress_and_log("Unloading Cog")
@@ -742,12 +745,12 @@ class MyClient(commands.Bot):
                         return
                     if self.ch.command_handler_status.captcha and not bypass:
                         return
-                    from utils.farm_control import command_allowed as farm_allowed
+                    from utils.gambling_control import command_allowed as farm_allowed
                     if not farm_allowed(msg, self.settings_dict.prefix, self.alias):
                         return
                     sent_message = await channel.send(msg, silent=silent)
             else:
-                from utils.farm_control import command_allowed as farm_allowed
+                from utils.gambling_control import command_allowed as farm_allowed
                 if not farm_allowed(msg, self.settings_dict.prefix, self.alias):
                     return
                 sent_message = await channel.send(msg, silent=silent)
@@ -778,8 +781,16 @@ class MyClient(commands.Bot):
                     return sent_message
                 if typingIndicator:
                     async with channel.typing():
+                        from utils.gem_control import command_allowed as gems_allowed
+                        if not gems_allowed(message, self.settings_dict.prefix, self.alias):
+                            await self.ch.set_stat(True)
+                            return sent_message
                         await channel.send(message, silent=silent)
                 else:
+                    from utils.gem_control import command_allowed as gems_allowed
+                    if not gems_allowed(message, self.settings_dict.prefix, self.alias):
+                        await self.ch.set_stat(True)
+                        return sent_message
                     await channel.send(message, silent=silent)
                 await self.ch.set_stat(True)
                 self.response_guard.sent(None)
@@ -803,6 +814,10 @@ class MyClient(commands.Bot):
                         return False
                     from utils.farm_control import enabled as farm_enabled
                     if not farm_enabled(msg):
+                        return False
+                    from utils.gem_control import command_allowed as gems_allowed
+                    text_command = self.settings_dict.prefix + msg + " " + " ".join(str(value) for value in kwargs.values())
+                    if not gems_allowed(text_command, self.settings_dict.prefix, self.alias):
                         return False
                     self.response_guard.expect(channel.id)
                     try:

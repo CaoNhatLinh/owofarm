@@ -26,5 +26,6 @@
     "gambleGoalEnabled": true,
     "gambleGoalAmount": 30000,
     "gambleLossEnabled": true,
-    "gambleLossAmount": 10000
+    "gambleLossAmount": 10000,
+    "gemsEnabled": true
 }
