@@ -3,25 +3,22 @@ setlocal EnableExtensions DisableDelayedExpansion
 cd /d "%~dp0" || exit /b 1
 title Owofarm - Install
 if exist ".venv\Scripts\python.exe" (
-    ".venv\Scripts\python.exe" -c "import sys; raise SystemExit(not ((3,12) <= sys.version_info[:2] < (3,14)))" >nul 2>&1
+    ".venv\Scripts\python.exe" -c "import sys; raise SystemExit(not ((3,12) <= sys.version_info[:2] < (3,16)))" >nul 2>&1
     if not errorlevel 1 goto ready
     echo Existing .venv is unavailable. Rename .venv and run this installer again.
     goto failed
 )
-py -3.12 -c "import sys" >nul 2>&1
-if not errorlevel 1 (
-    py -3.12 -m venv .venv
-    goto created
+for %%V in (3.15 3.14 3.13 3.12) do (
+    py -%%V -c "import sys" >nul 2>&1
+    if not errorlevel 1 (
+        py -%%V -m venv .venv
+        goto created
+    )
 )
-py -3.13 -c "import sys" >nul 2>&1
-if not errorlevel 1 (
-    py -3.13 -m venv .venv
-    goto created
-)
-python -c "import sys; raise SystemExit(not ((3,12) <= sys.version_info[:2] < (3,14)))" >nul 2>&1
+python -c "import sys; raise SystemExit(not ((3,12) <= sys.version_info[:2] < (3,16)))" >nul 2>&1
 if errorlevel 1 (
-    echo Install Python 3.12 or 3.13, 64-bit, from https://www.python.org/downloads/windows/
-    echo Select Add Python to PATH, then open this installer again.
+    echo Install Python 3.15, 64-bit, from https://www.python.org/downloads/windows/
+    echo Open a new CMD window, check py --version, then run this installer again.
     goto failed
 )
 python -m venv .venv

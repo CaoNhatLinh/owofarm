@@ -4,7 +4,7 @@ Bản tuỳ chỉnh dựa trên [owo-dusk/owo-dusk](https://github.com/owo-dusk/
 
 ## Chạy trên Windows
 
-1. Cài **Python 3.12 hoặc 3.13 bản 64-bit** và **Git for Windows**.
+1. Cài **Python 3.15 bản 64-bit** và **Git for Windows**. Dự án cũng hỗ trợ Python 3.12–3.14.
 2. Tải ZIP của repository, giải nén rồi bấm đúp `install.bat` một lần để cài thư viện.
 3. Bấm đúp `start.bat` để mở bot và web.
 4. Mở http://127.0.0.1:1200, vào **Điều khiển → Tài khoản Discord**.

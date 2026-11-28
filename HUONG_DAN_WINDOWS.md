@@ -3,7 +3,7 @@
 ## Cần có
 
 - Windows 10/11, máy 64-bit, Internet và trình duyệt web.
-- [Python 3.12 hoặc 3.13 bản 64-bit](https://www.python.org/downloads/windows/). Khi cài chọn **Add Python to PATH**.
+- [Python 3.15 bản 64-bit](https://www.python.org/downloads/windows/). Có thể dùng Python 3.12–3.14 nếu đã cài.
 - [Git for Windows](https://git-scm.com/download/win). Git còn cần để pip tải thư viện discord.py-self được ghim theo commit, ngay cả khi bạn tải dự án bằng ZIP.
 - Thông tin tài khoản của bạn và ID kênh mà tài khoản truy cập/gửi tin được.
 
@@ -34,6 +34,14 @@ start.bat
 ```
 
 Nút **Dừng tài khoản** tạm dừng tài khoản đang xem, còn **Dừng tất cả** tạm dừng mọi tài khoản. **Ctrl+C trong cửa sổ CMD** đóng bot và bảng điều khiển. Chạy một cửa sổ `start.bat` cho mọi tài khoản dùng cùng bảng điều khiển.
+
+## Nâng môi trường đang dùng lên Python 3.15
+
+1. Cài Python 3.15 và kiểm tra bằng `py -3.15 --version` trong CMD.
+2. Dừng bot và đổi tên thư mục `.venv` thành `.venv-old`. Nếu tên đó đã có, dùng tên khác như `.venv-old-2`.
+3. Chạy lại `install.bat`, kiểm tra bằng `.venv\Scripts\python.exe --version`, rồi mở `start.bat`.
+
+Trình cài ưu tiên Python 3.15 khi tạo `.venv` mới. Token, cấu hình và dữ liệu của bot nằm ngoài thư mục này.
 
 ## Nếu gặp lỗi
 

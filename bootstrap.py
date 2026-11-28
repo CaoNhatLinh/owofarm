@@ -26,8 +26,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true", help="Check account input before starting")
     args = parser.parse_args()
-    if not (3, 12) <= sys.version_info[:2] < (3, 14):
-        print("Use Python 3.12 or 3.13 (64-bit).")
+    if not (3, 12) <= sys.version_info[:2] < (3, 16):
+        print("Use Python 3.12 through 3.15 (64-bit).")
         return 1
     tokens = prepare()
     if args.check:
