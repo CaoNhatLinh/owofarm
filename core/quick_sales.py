@@ -16,14 +16,19 @@ def check_context(bot, context):
     status = bot.ch.command_handler_status
     if status.captcha or status.sleep or bot.response_guard.cooling_down:
         raise SaleStopped("Bot đang nghỉ hoặc chờ CAPTCHA. Không tiếp tục thao tác.")
-    if (bot.cm.id, bot.settings_dict.prefix) != context:
+    if (getattr(bot.cm, "id", None), bot.settings_dict.prefix) != context:
         raise SaleStopped("Kênh hoặc prefix đã đổi. Lượt bán đã dừng.")
+    if getattr(bot, "_dashboard_account_id", None):
+        settings = bot_control.settings_for(bot)
+        channel_id = settings["channelId"] or str(bot._initial_channel_id)
+        if (channel_id, settings["prefix"]) != (str(context[0]), context[1]):
+            raise SaleStopped("Kênh hoặc tiền tố đang đổi. Lượt bán đã dừng.")
 
 
 async def wait_ready(bot, context):
     check_context(bot, context)
     try:
-        await asyncio.wait_for(bot.response_guard.wait_ready(manual=True), bot_control.get_settings()["responseTimeout"] + 5)
+        await asyncio.wait_for(bot.response_guard.wait_ready(manual=True), bot_control.settings_for(bot)["responseTimeout"] + 5)
     except asyncio.TimeoutError:
         raise SaleStopped("Chưa nhận được phản hồi lệnh trước. Không tự gửi lại lệnh bán.") from None
     check_context(bot, context)

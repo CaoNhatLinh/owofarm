@@ -14,11 +14,11 @@ Không cần Node.js, Docker, Visual Studio Code hay cài MySQL. Dữ liệu dù
 1. Tải ZIP từ https://github.com/CaoNhatLinh/owofarm rồi giải nén. Không chạy trực tiếp trong file ZIP.
 2. Trong thư mục vừa giải nén, bấm đúp **install.bat**. Đợi thông báo Installed. Trình cài tạo `.venv`, cài thư viện, sao chép cấu hình mẫu còn thiếu; không tự chạy bot.
 3. Bấm đúp **start.bat**. Giữ cửa sổ CMD mở, vào http://127.0.0.1:1200. Không cần mật khẩu web.
-4. Vào **Điều khiển → Tài khoản Discord**, nhập token và ID kênh, bấm **Lưu tài khoản**. Khi chưa có tài khoản, bot tự kết nối sau khi lưu. Có nút **Hiện token / Ẩn token**, cho phép xem lại và sửa token đã lưu.
-5. Nếu giữ nguyên token và chỉ đổi ID kênh khi đã kết nối, Lưu tài khoản sẽ kiểm tra quyền rồi chuyển kênh ngay. Nếu thay token khi bot đang kết nối tài khoản cũ, lưu xong hãy nhấn Ctrl+C trong CMD rồi chạy `start.bat` lại. Lưu không tự ngắt ván đang chơi.
-6. Kiểm tra prefix ở tab Điều khiển cho đúng server: `o` gửi `oh`; `owo ` có dấu cách cuối gửi `owo h`. ID kênh cho tài khoản được dùng khi kết nối; ô đổi kênh của bot dùng để chuyển kênh trong lúc chạy.
+4. Vào **Tài khoản Discord → Thêm tài khoản**, nhập token và ID kênh. Khi thêm tài khoản đầu tiên, bot tự kết nối sau khi lưu. Thêm tài khoản tiếp theo hoặc thay token thì khởi động lại `start.bat`.
+5. Chọn tài khoản ở đầu trang rồi vào **Tự động hóa** để chỉnh ID kênh, lệnh tự động và tiền tố riêng. `o` gửi `oh`, còn `owo ` có dấu cách cuối gửi `owo h`.
+6. Trong **Tài khoản Discord**, chọn **Đổi token** để cập nhật tài khoản. Nút **Xem token đang lưu** chỉ hiện token của tài khoản đang chỉnh.
 
-Token chỉ lưu ở `tokens.txt` trên máy, không gửi vào chat hay GitHub. Bạn cũng có thể sửa file trực tiếp theo dạng `TOKEN ID_KENH`, mỗi tài khoản một dòng. Form web hỗ trợ một tài khoản; nếu file có nhiều tài khoản thì sửa file trực tiếp để giữ đủ các tài khoản.
+Token chỉ lưu ở `tokens.txt` trên máy. Bạn cũng có thể sửa file trực tiếp theo dạng `TOKEN ID_KENH`, mỗi tài khoản một dòng.
 
 Web luôn chỉ lắng nghe 127.0.0.1, kể cả cấu hình cũ có bật enableHost. Các trường mật khẩu web cũ không còn được dùng.
 
@@ -33,7 +33,7 @@ cd /d "D:\Workspace\Source Code\owofarm"
 start.bat
 ```
 
-Nút Dừng trên web tạm dừng tự động; **Ctrl+C trong cửa sổ CMD** đóng tiến trình và web. Không mở nhiều cửa sổ bot cùng lúc vì web dùng cổng 1200. Máy cần bật và tiến trình cần chạy để tự động thực hiện tác vụ.
+Nút **Dừng tài khoản** tạm dừng tài khoản đang xem, còn **Dừng tất cả** tạm dừng mọi tài khoản. **Ctrl+C trong cửa sổ CMD** đóng bot và bảng điều khiển. Chạy một cửa sổ `start.bat` cho mọi tài khoản dùng cùng bảng điều khiển.
 
 ## Nếu gặp lỗi
 
@@ -41,7 +41,7 @@ Nút Dừng trên web tạm dừng tự động; **Ctrl+C trong cửa sổ CMD**
 - **.venv không dùng được sau đổi máy/nâng cấp Python:** dừng bot, đổi tên thư mục `.venv` thành `.venv-old`, chạy `install.bat` lại. Không cần xoá token hoặc cấu hình.
 - **Không cài được thư viện:** xem lỗi ngay phía trên trong CMD, kiểm tra Internet, Git và phiên bản Python; chạy lại `install.bat`.
 - **Web không mở:** kiểm tra cửa sổ CMD còn chạy và không báo lỗi cổng đang dùng.
-- **Đăng nhập thất bại:** sửa token ở Điều khiển → Tài khoản Discord hoặc kiểm tra `tokens.txt`; không đăng thông tin đó lên GitHub để nhờ sửa.
+- **Đăng nhập thất bại:** vào **Tài khoản Discord → Đổi token** hoặc kiểm tra `tokens.txt` trên máy.
 - **Bật image solver riêng:** thư viện ONNX là tuỳ chọn, không được cài trong bộ Windows mặc định. Cấu hình mẫu để chức năng này tắt.
 
 ## Đẩy mã nguồn lên GitHub

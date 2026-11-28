@@ -18,6 +18,7 @@ from discord.ext import commands, tasks
 from discord.ext.commands import ExtensionNotLoaded
 
 from core.cogs._BASE import BaseCog
+from utils import bot_control
 
 
 class Reactionbot(BaseCog):
@@ -90,7 +91,8 @@ class Reactionbot(BaseCog):
             and self.reaction_bot_settings.huntAndBattle,
             "owo": self.reaction_bot_settings.owo and self.settings.owo.enabled,
             "pray": self.settings.pray.enabled
-            and self.reaction_bot_settings.prayAndCurse,
+            and self.reaction_bot_settings.prayAndCurse
+            and not bot_control.manages_prayer(self.bot),
             "curse": self.settings.curse.enabled
             and self.reaction_bot_settings.prayAndCurse,
         }
@@ -114,7 +116,12 @@ class Reactionbot(BaseCog):
     async def send_cmd(self, cmd):
         await self.bot.sleep(self.reaction_bot_settings.get_cd())
 
-        await self.bot.ch.put_queue(self.fetch_cmd(cmd), quick=True, priority=True)
+        data = self.fetch_cmd(cmd)
+        if cmd == "pray":
+            if bot_control.manages_prayer(self.bot):
+                return
+            data["automation_check"] = lambda: not bot_control.manages_prayer(self.bot)
+        await self.bot.ch.put_queue(data, quick=True, priority=True)
         self.cmd_states[cmd if cmd != "curse" else "pray"] = time.time()
 
     async def startup_handler(self):

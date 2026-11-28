@@ -1,6 +1,7 @@
 """Read-only chronological replay, sharing the live side-selection rules."""
 from utils.coinflip_history import History
 from utils.coinflip_probe import ProbePlan
+from utils.gambling_control import stake_for_losses
 import bisect
 import random
 
@@ -34,7 +35,10 @@ def compare(rows, data):
     training, testing = rows[:warmup], rows[warmup:]
     results = []
     for mode in ("heads", "tails", "auto100", "auto500", "probe", "probeLossHeads", "probeLossTails", "switchHeads", "switchTails", "generatorHeads", "generatorTails"):
-        for doubling in ((True,) if mode.startswith("generator") else (False, True)):
+        strategies = ("double",) if mode.startswith("generator") else ("fixed", "double", "bonus")
+        for strategy in strategies:
+            doubling = strategy != "fixed"
+            bonus = strategy == "bonus"
             history = History(training)
             capital, base = data["capital"], data["base"]
             if mode.startswith("generator"):
@@ -51,7 +55,7 @@ def compare(rows, data):
             curve = [dict(round=0, profit=0)]
             window = 100 if mode == "auto100" else 500
             for index, (message, actual_side, actual_outcome) in enumerate(testing, 1):
-                main_stake = base * 2**progression if doubling else base
+                main_stake = stake_for_losses(base, progression, doubling, bonus)
                 probe = probe_mode and plan.phase == "probe"
                 stake = 1 if probe else main_stake
                 profit = balance - capital
@@ -90,8 +94,8 @@ def compare(rows, data):
                 drawdown = max(drawdown, peak - balance)
                 history.record(message, side, "win" if won else "loss")
                 curve.append(dict(round=index, profit=balance-capital))
-            results.append(dict(id=f"{mode}-{'double' if doubling else 'fixed'}", mode=mode,
-                                doubling=doubling, profit=balance-capital, balance=balance,
+            results.append(dict(id=f"{mode}-{strategy}", mode=mode,
+                                doubling=doubling, bonus=bonus, profit=balance-capital, balance=balance,
                                 base=base, probes=probes, applicable=base<=250000,
                                 wins=wins, losses=total_losses, played=played, maxDrawdown=drawdown,
                                 maxStake=max_stake, maxLossStreak=best_losses,

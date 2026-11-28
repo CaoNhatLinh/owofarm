@@ -3,23 +3,19 @@ import os
 import tempfile
 import threading
 import time
+from datetime import datetime, time as datetime_time, timedelta
 
-import utils.timestamp as utils
 from utils.colors import COLORS
 from utils.errors import suppress_and_log
 
-path = "utils/data/weekly_runtime.json"
+DEFAULT_PATH = "utils/data/weekly_runtime.json"
+UPDATE_INTERVAL = 15
+_session_started = None
 
-DEFAULT_WEEKLY_RUNTIME = {
-    "0": [0, 0],
-    "1": [0, 0],
-    "2": [0, 0],
-    "3": [0, 0],
-    "4": [0, 0],
-    "5": [0, 0],
-    "6": [0, 0],
-    "last_checked": 0,
-}
+
+def weekly_totals(now):
+    monday = now.date() - timedelta(days=now.weekday())
+    return {"week": monday.isoformat(), "seconds": [0] * 7}
 
 
 def _write_weekly_runtime(weekly_runtime_dict, path):
@@ -50,58 +46,70 @@ def _write_weekly_runtime(weekly_runtime_dict, path):
         print(f"{COLORS.BOLD_YELLOW}Weekly runtime error: {e} {COLORS.RESET}")
 
 
-def load_weekly_runtime(path="utils/data/weekly_runtime.json") -> dict:
+def load_weekly_runtime(path=DEFAULT_PATH, *, now=None):
+    now = now or datetime.now()
+    current = weekly_totals(now)
     try:
         with open(path, "r", encoding="utf-8") as config_file:
-            return json.load(config_file)
-    except (json.JSONDecodeError, FileNotFoundError, OSError):
-        # OSError is also considered since weekly runtime statistics isn't that important,
-        # not ideal but works.
-        print(
-            f"{COLORS.BOLD_YELLOW}Weekly runtime data file is missing or corrupted, recreating with default values.{COLORS.RESET}"
-        )
-        weekly_runtime_dict = {
-            k: (v.copy() if isinstance(v, list) else v)
-            for k, v in DEFAULT_WEEKLY_RUNTIME.items()
-        }
-        _write_weekly_runtime(weekly_runtime_dict, path)
-        return weekly_runtime_dict
+            stored = json.load(config_file)
+    except (ValueError, OSError):
+        return current
+    if not isinstance(stored, dict):
+        return current
+    if "week" in stored:
+        seconds = stored.get("seconds")
+        if stored["week"] == current["week"] and isinstance(seconds, list) and len(seconds) == 7:
+            current["seconds"] = [value if type(value) in (int, float) and 0 <= value <= 86400
+                                  else 0 for value in seconds]
+        return current
+
+    # Older data has one first/last interval per weekday. Retain only its overlap with this week.
+    day = datetime.combine(now.date() - timedelta(days=now.weekday()), datetime_time.min)
+    for weekday in range(7):
+        interval = stored.get(str(weekday))
+        next_day = day + timedelta(days=1)
+        if isinstance(interval, list) and len(interval) == 2 and all(
+            type(value) in (int, float) and 0 <= value <= now.timestamp() + 86400 for value in interval
+        ):
+            start, end = interval
+            current["seconds"][weekday] = max(0, min(end, next_day.timestamp(), now.timestamp())
+                                                - max(start, day.timestamp()))
+        day = next_day
+    return current
+
+
+def accumulate_runtime(data, now, elapsed):
+    current = weekly_totals(now)
+    if data["week"] != current["week"]:
+        data = current
+    weekday = now.weekday()
+    today = min(elapsed, (now - datetime.combine(now.date(), datetime_time.min)).total_seconds())
+    data["seconds"][weekday] += today
+    if weekday:
+        data["seconds"][weekday - 1] += elapsed - today
+    return data
+
+
+def session_uptime_seconds():
+    return 0 if _session_started is None else max(0, int(time.monotonic() - _session_started))
 
 
 @suppress_and_log("Weekly Runtime Updater")
-def handle_weekly_runtime(path="utils/data/weekly_runtime.json"):
+def handle_weekly_runtime(path=DEFAULT_PATH):
+    data = load_weekly_runtime(path)
+    previous = time.monotonic()
     while True:
-        weekly_runtime_dict = load_weekly_runtime(path)
-        weekday = utils.get_weekday()
-
-        if weekly_runtime_dict[weekday][0] == 0:
-            weekly_runtime_dict[weekday][0], weekly_runtime_dict[weekday][1] = (
-                time.time(),
-                time.time(),
-            )
-        else:
-            weekly_runtime_dict[weekday][1] = time.time()
-
-        _write_weekly_runtime(weekly_runtime_dict, path)
-
-        # update every 15 seconds
-        time.sleep(15)
+        time.sleep(UPDATE_INTERVAL)
+        current = time.monotonic()
+        elapsed = min(UPDATE_INTERVAL, current - previous)
+        data = accumulate_runtime(data, datetime.now(), elapsed)
+        _write_weekly_runtime(data, path)
+        previous = current
 
 
 @suppress_and_log("Weekly Runtime Update Starter")
-def start_runtime_loop(path="utils/data/weekly_runtime.json"):
-    weekly_runtime_dict = load_weekly_runtime(path)
-
-    now = time.time()
-    last_checked = weekly_runtime_dict.get("last_checked", 0)
-
-    if now - last_checked > 604800:  # 604800 -> seconds in a week
-        for day in map(str, range(7)):
-            weekly_runtime_dict[day] = [0, 0]
-
-    weekly_runtime_dict["last_checked"] = now
-
-    _write_weekly_runtime(weekly_runtime_dict, path)
-
-    loop_thread = threading.Thread(target=handle_weekly_runtime, daemon=True)
+def start_runtime_loop(path=DEFAULT_PATH):
+    global _session_started
+    _session_started = time.monotonic()
+    loop_thread = threading.Thread(target=handle_weekly_runtime, args=(path,), daemon=True)
     loop_thread.start()

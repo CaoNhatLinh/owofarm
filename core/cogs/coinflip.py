@@ -17,7 +17,7 @@ from discord.ext import commands
 from discord.ext.commands import ExtensionNotLoaded
 
 from core.cogs._BASE import BaseCog
-from utils.gambling_control import GamblingLifecycle
+from utils.gambling_control import GamblingLifecycle, bet_amount
 from utils import bot_control
 from utils.system.notification import notify
 
@@ -82,9 +82,7 @@ class Coinflip(GamblingLifecycle, BaseCog):
                 await self.bot.ch.remove_queue(id="coinflip")
                 await self.bot.sleep(self.settings.get_cd())
 
-            amount_to_gamble = int(
-                self.settings.startValue * (self.settings.multiplier**self.turns_lost)
-            )
+            amount_to_gamble = bet_amount("coinflip", self.turns_lost, self.bot)
 
             # Goal system check
             if self.profit_goal_reached():
@@ -105,26 +103,18 @@ class Coinflip(GamblingLifecycle, BaseCog):
                 self.gamble_flags["goal_reached"] = False
 
             # Balance check
-            if (
-                amount_to_gamble > self.bot.stats.balance
-                and self.bot.stats.has_updated_balance
-            ):
+            if self.balance_blocks(amount_to_gamble):
                 if not self.gamble_flags["no_balance"]:
                     self.gamble_flags["no_balance"] = True
-                    await self.bot.log(
-                        f"Amount to gamble next ({amount_to_gamble}) exceeds bot balance ({self.bot.stats.balance}), stopping coinflip!",
-                        "#4a270c",
-                    )
-                    notify(
-                        f"Amount to gamble next ({amount_to_gamble}) exceeds bot balance ({self.bot.stats.balance}), stopping coinflip!",
-                        "Coinflip - Insufficient balance",
-                    )
+                    message = f"Tạm dừng Tung xu. Chờ OwO xác nhận đủ {amount_to_gamble:,} cowoncy cho ván tiếp theo."
+                    await self.bot.log(message, "#4a270c")
+                    notify(message, "Tung xu · Kiểm tra số dư")
 
-                await self.bot.sleep_till(self.cooldowns.moderateCooldown)
-                return await self.start_cf()
+                await self.wait_for_balance()
+                return await self.start_cf(startup=True)
             elif self.gamble_flags["no_balance"]:
                 await self.bot.log(
-                    f"Balance regained! ({self.bot.stats.balance}) - restarting coinflip!",
+                    "OwO đã xác nhận đủ tiền cho lượt cược Tung xu tiếp theo.",
                     "#4a270c",
                 )
                 self.gamble_flags["no_balance"] = False
@@ -161,7 +151,7 @@ class Coinflip(GamblingLifecycle, BaseCog):
             else:
                 self.cmd["cmd_arguments"] = str(amount_to_gamble)
                 from utils.coinflip_history import select_side
-                option = select_side(self.bot, bot_control.get_settings()["coinflipSide"])
+                option = select_side(self.bot, bot_control.settings_for(self.bot)["coinflipSide"])
                 self.cmd["cmd_arguments"] += f" {option}"
                 if self.gambling_enabled():
                     await self.bot.ch.put_queue(self.cmd)

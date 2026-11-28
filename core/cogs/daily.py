@@ -19,29 +19,30 @@ from discord.ext.commands import ExtensionNotLoaded
 from core.cogs._BASE import BaseCog
 
 cmd = {"cmd_name": "daily", "prefix": True, "checks": True, "id": "daily"}
+DAILY_REWARD = re.compile(r"Here is your daily \*\*<:cowoncy:\d+> ([\d,]+)")
 
 
 class Daily(BaseCog):
     def __init__(self, bot):
         super().__init__(bot)
+        self._next_daily = None
+        self._last_daily_reply = 0
 
     @property
     def cooldowns(self):
         return self.bot.settings_dict.cooldowns
 
-    async def start_daily(self):
-        last_daily_time = await self.bot.db.fetch_cmd_lastran_time("daily")
-
-        if not self.bot.should_run(
-            last_daily_time
-        ):  # 86400 = seconds till a day(24hrs).
-            await asyncio.sleep(self.bot.calc_time())  # Wait until next 12:00 AM PST
-
-        await self.bot.sleep_till(self.cooldowns.briefCooldown)
+    async def start_daily(self, *, after_reply=False):
+        if after_reply or not self.bot.should_run(await self.bot.db.fetch_cmd_lastran_time("daily")):
+            await asyncio.sleep(self.bot.calc_time())  # Wait until the next Pacific midnight.
+            await self.bot.sleep_till(self.cooldowns.moderateCooldown)
+        else:
+            await self.bot.sleep_till(self.cooldowns.briefCooldown)
         await self.bot.ch.put_queue(cmd, priority=True)
-        await self.bot.ch.set_stat(False)
 
-        self.bot.db.update_cmd_lastran_time("daily")
+    def schedule_daily(self, *, after_reply=False):
+        if self._next_daily is None or self._next_daily.done():
+            self._next_daily = asyncio.create_task(self.start_daily(after_reply=after_reply))
 
     async def cog_load(self):
         if not self.bot.settings_dict.daily:
@@ -50,58 +51,33 @@ class Daily(BaseCog):
             except ExtensionNotLoaded:
                 pass
         else:
-            asyncio.create_task(self.start_daily())
+            self.schedule_daily()
 
     async def cog_unload(self):
+        if self._next_daily is not None:
+            self._next_daily.cancel()
         await self.bot.ch.remove_queue(id="daily")
 
     @commands.Cog.listener()
     async def on_message(self, message):
         nick = self.bot.get_nick(message)
 
-        if (
-            message.channel.id == self.bot.cm.id
-            and message.author.id == self.bot.owo_bot_id
-            and nick in message.content
-        ):
-            if "Here is your daily **<:cowoncy:416043450337853441>" in message.content:
-                """Task: add cash check regex here"""
-                await self.bot.ch.remove_queue(cmd)
-                await self.bot.ch.set_stat(True)
-                await asyncio.sleep(self.bot.calc_time())
+        if (message.channel.id != self.bot.cm.id or message.author.id != self.bot.owo_bot_id
+                or not nick or nick not in message.content or message.id <= self._last_daily_reply):
+            return
+        reward = DAILY_REWARD.search(message.content)
+        wait = "**⏱ |** Nu! **" in message.content and "! You need to wait" in message.content
+        if not reward and not wait:
+            return
 
-                self.bot.update_cash(
-                    int(
-                        re.search(
-                            r"Here is your daily \*\*<:cowoncy:\d+> ([\d,]+)",
-                            message.content,
-                        )
-                        .group(1)
-                        .replace(",", "")
-                    )
-                )
-
-                await self.bot.sleep_till(self.cooldowns.moderateCooldown)
-                await self.bot.ch.put_queue(cmd, priority=True)
-                await self.bot.ch.set_stat(False)
-
-                self.bot.db.update_cmd_lastran_time("daily")
-
-                if self.bot.global_settings_dict.webhook.enabled:
-                    await self.bot.send_webhook("daily_claim")
-
-            if (
-                "**⏱ |** Nu! **" in message.content
-                and "! You need to wait" in message.content
-            ):
-                await self.bot.ch.remove_queue(cmd)
-                await self.bot.ch.set_stat(True)
-                await asyncio.sleep(self.bot.calc_time())
-                await self.bot.sleep_till(self.cooldowns.moderateCooldown)
-                await self.bot.ch.put_queue(cmd, priority=True)
-                await self.bot.ch.set_stat(False)
-
-                self.bot.db.update_cmd_lastran_time("daily")
+        self._last_daily_reply = message.id
+        self.bot.db.update_cmd_lastran_time("daily")
+        if reward:
+            self.bot.update_cash(int(reward[1].replace(",", "")))
+        await self.bot.ch.remove_queue(id="daily")
+        self.schedule_daily(after_reply=True)
+        if reward and self.bot.global_settings_dict.webhook.enabled:
+            await self.bot.send_webhook("daily_claim")
 
 
 async def setup(bot):

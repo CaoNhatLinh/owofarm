@@ -14,20 +14,24 @@ import logging
 import random
 import sqlite3
 import sys
+from collections import deque
+from hashlib import sha256
+from pathlib import Path
+from threading import Lock
 from urllib.parse import urlsplit
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, make_response, render_template, request, url_for
 
-from utils.runtime_handler import load_weekly_runtime
+from utils.runtime_handler import load_weekly_runtime, session_uptime_seconds
 from utils import bot_control
 from utils import quick_sale_jobs
 from utils import rare_catches
 from utils import gamble_session
 from utils import account_setup
-from utils.timestamp import get_weekday
 
 app = Flask(__name__)
-website_logs = []
+website_logs = deque(maxlen=300)
+_website_logs_lock = Lock()
 config_updated = None
 
 # these will be updated
@@ -73,53 +77,86 @@ def get_from_db(command):
         return item
 
 
+@app.template_global()
+def asset_url(filename):
+    digest = sha256((Path(app.static_folder) / filename).read_bytes()).hexdigest()[:12]
+    return url_for("static", filename=filename, v=digest)
+
+
 @app.route("/")
 def home():
-    return render_template("index.html", version=version,
-                           weapon_sale_ranks=quick_sale_jobs.WEAPON_RANKS,
-                           animal_sale_ranks=quick_sale_jobs.ANIMAL_RANKS)
+    response = make_response(render_template(
+        "index.html", version=version,
+        weapon_sale_ranks=quick_sale_jobs.WEAPON_RANKS,
+        animal_sale_ranks=quick_sale_jobs.ANIMAL_RANKS,
+    ))
+    response.cache_control.no_store = True
+    return response
 
 
 @app.route("/api/console", methods=["GET"])
 def get_console_logs():
-    try:
+    with _website_logs_lock:
         log_string = "\n".join(website_logs)
-        return log_string
-    except Exception as e:
-        print(f"Error fetching logs: {e}")
-        return jsonify(
-            {"status": "error", "message": "An error occurred while fetching logs"}
-        ), 500
+    return Response(log_string, mimetype="text/plain", headers={
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+    })
 
 
 @app.route("/api/bot", methods=["GET", "POST"])
 def control_bot():
+    try:
+        account_id = requested_account()
+    except ValueError as exc:
+        return jsonify(status="error", message=str(exc)), 400
+    except OSError:
+        return jsonify(status="error", message="Không đọc được danh sách tài khoản."), 500
     if request.method == "POST":
         data = request.get_json(silent=True)
         if not isinstance(data, dict) or data.get("action") not in ("start", "stop"):
             return jsonify(status="error", message="Action must be start or stop"), 400
-        bot_control.set_running(data["action"] == "start")
-    response = jsonify(status="success", running=bot_control.is_running(),
-                       resumeRequest=bot_control.get_resume_generation(),
-                       settings=bot_control.get_settings(), accounts=bot_control.get_runtimes())
+        bot_control.set_running(data["action"] == "start", account_id)
+    response = jsonify(status="success", running=bot_control.is_running(account_id),
+                       allRunning=bot_control.is_running(),
+                       resumeRequest=bot_control.get_resume_generation(account_id),
+                       settings=bot_control.get_settings(account_id), accounts=bot_control.get_runtimes(),
+                       overrides=bot_control.get_account_overrides(account_id) if account_id else {})
     response.headers["Cache-Control"] = "no-store"
     return response
 
 
-@app.route("/api/settings", methods=["GET", "PATCH"])
+def requested_account():
+    account_id = request.args.get("accountId")
+    if account_id is not None and not any(
+        account["accountId"] == account_id for account in account_setup.list_accounts()
+    ):
+        raise ValueError("Tài khoản này không có trong cấu hình.")
+    return account_id
+
+
+@app.route("/api/settings", methods=["GET", "PATCH", "DELETE"])
 def dashboard_settings():
-    if request.method == "PATCH":
-        try:
+    try:
+        account_id = requested_account()
+        if request.method == "PATCH":
             values = bot_control.validate_settings(request.get_json(silent=True))
             requested_channel = values.get("channelId", "")
-            if requested_channel and requested_channel != bot_control.get_settings()["channelId"]:
-                bot_control.validate_channel(requested_channel)
-            bot_control.update_settings(values)
-        except ValueError as exc:
-            return jsonify(status="error", message=str(exc)), 400
-        except OSError:
-            return jsonify(status="error", message="Không lưu được cấu hình. Thử lại sau."), 500
-    response = jsonify(status="success", settings=bot_control.get_settings())
+            if requested_channel and requested_channel != bot_control.get_settings(account_id)["channelId"]:
+                if account_id is None:
+                    bot_control.validate_channel(requested_channel)
+                elif bot_control.has_channel_checker(account_id):
+                    bot_control.validate_channel(requested_channel, account_id)
+            bot_control.update_settings(values, account_id)
+        elif request.method == "DELETE":
+            if account_id is None:
+                raise ValueError("Chọn tài khoản cần dùng lại thiết lập mặc định.")
+            bot_control.clear_account_settings(account_id, keep_channel=True)
+        response = jsonify(status="success", settings=bot_control.get_settings(account_id),
+                           overrides=bot_control.get_account_overrides(account_id) if account_id else {})
+    except ValueError as exc:
+        return jsonify(status="error", message=str(exc)), 400
+    except OSError:
+        return jsonify(status="error", message="Không đọc hoặc lưu được cấu hình."), 500
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -146,15 +183,57 @@ def account_credentials():
         return jsonify(status="error", message="Không đọc/ghi được file tài khoản."), 500
 
 
+@app.route("/api/accounts", methods=["GET", "POST"])
+def dashboard_accounts():
+    if request.content_length and request.content_length > 4096:
+        return jsonify(status="error", message="Dữ liệu quá dài."), 413
+    try:
+        if request.method == "POST":
+            account = account_setup.add(request.get_json(silent=True))
+            response = jsonify(status="success", account=account)
+            response.status_code = 201
+        else:
+            response = jsonify(status="success", accounts=account_setup.list_accounts())
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    except ValueError as exc:
+        return jsonify(status="error", message=str(exc)), 400
+    except OSError:
+        return jsonify(status="error", message="Không đọc hoặc lưu được tài khoản."), 500
+
+
+@app.route("/api/accounts/<account_id>", methods=["GET", "PATCH"])
+def dashboard_account(account_id):
+    if request.content_length and request.content_length > 4096:
+        return jsonify(status="error", message="Dữ liệu quá dài."), 413
+    try:
+        if request.method == "PATCH":
+            account = account_setup.update_account(account_id, request.get_json(silent=True))
+        elif request.args.get("reveal") == "1":
+            account = account_setup.read_account(account_id, reveal=True)
+        else:
+            account = next((item for item in account_setup.list_accounts() if item["accountId"] == account_id), None)
+            if account is None:
+                return jsonify(status="error", message="Không tìm thấy tài khoản."), 404
+        response = jsonify(status="success", account=account)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    except ValueError as exc:
+        return jsonify(status="error", message=str(exc)), 400
+    except OSError:
+        return jsonify(status="error", message="Không đọc hoặc lưu được tài khoản."), 500
+
+
 @app.route("/api/gamble/simulate", methods=["POST"])
 def simulate_coinflip():
     from utils.coinflip_simulation import validate, compare
     from utils.coinflip_history import load
     try:
         data = validate(request.get_json(silent=True))
-        accounts = {str(a.get("accountId")) for a in bot_control.get_runtimes() if a.get("accountId")}
+        accounts = {a["accountId"] for a in account_setup.list_accounts()}
+        accounts.update(str(a["accountId"]) for a in bot_control.get_runtimes() if a.get("accountId"))
         if data["accountId"] not in accounts:
-            raise ValueError("Chọn tài khoản đang kết nối để đọc lịch sử.")
+            raise ValueError("Chọn tài khoản đã lưu để đọc lịch sử.")
         result = compare(load(data["accountId"]).rows, data)
         response = jsonify(result)
         response.headers["Cache-Control"] = "no-store"
@@ -233,7 +312,7 @@ def fetch_cowoncy_data():
         )
         user_data = {}
         for row in rows:
-            user_id = row["user_id"]
+            user_id = str(row["user_id"])
             hour = row["hour"]
             earnings = row["earnings"]
 
@@ -246,10 +325,24 @@ def fetch_cowoncy_data():
         # Base data
         base_data = {"labels": [f"Hour {i}" for i in range(24)], "datasets": []}
 
-        for user_id, hourly_data in user_data.items():
+        account_names = {}
+        try:
+            account_names.update({
+                str(account["accountId"]): account["name"]
+                for account in account_setup.list_accounts() if account.get("name")
+            })
+        except (OSError, ValueError):
+            app.logger.warning("Could not read saved account names for the cowoncy chart")
+        account_names.update({
+            str(account["accountId"]): account["name"]
+            for account in bot_control.get_runtimes() if account.get("accountId") and account.get("name")
+        })
+
+        for position, (user_id, hourly_data) in enumerate(user_data.items(), 1):
             color_hue = random.randint(0, 360)
             dataset = {
-                "label": user_id,
+                "accountId": user_id,
+                "label": account_names.get(user_id) or f"Tài khoản đã lưu {position}",
                 "data": [hourly_data[i] for i in range(24)],
                 "borderColor": f"hsl({color_hue}, 100%, 50%)",
                 "backgroundColor": f"hsl({color_hue}, 100%, 70%)",
@@ -316,23 +409,12 @@ def fetch_cmd_data():
 @app.route("/api/fetch_weekly_runtime", methods=["GET"])
 def fetch_weekly_runtime():
     try:
-        # Fetch json data (self heals if the file is missing/corrupted)
-        data_dict = load_weekly_runtime("utils/data/weekly_runtime.json")
-
-        runtime_data = [
-            (val[1] - val[0]) / 60
-            for val in data_dict.values()
-            if isinstance(val, list)
-        ]
-
-        cur_hour = get_weekday()
-
-        # Return Data
+        weekly = load_weekly_runtime()
         return jsonify(
             {
                 "status": "success",
-                "runtime_data": runtime_data,
-                "current_uptime": data_dict[cur_hour],
+                "runtime_data": [seconds / 60 for seconds in weekly["seconds"]],
+                "current_uptime": [0, session_uptime_seconds()],
             }
         )
 
@@ -364,8 +446,5 @@ def web_start(port, should_host, ver, paswd):
 
 
 def website_append(content):
-    global website_logs
-    website_logs.append(content)
-
-    if len(website_logs) > 300:
-        website_logs.pop(0)
+    with _website_logs_lock:
+        website_logs.append(content)

@@ -17,7 +17,7 @@ from discord.ext import commands
 from discord.ext.commands import ExtensionNotLoaded
 
 from core.cogs._BASE import BaseCog
-from utils.gambling_control import GamblingLifecycle, blackjack_profit
+from utils.gambling_control import GamblingLifecycle, bet_amount, blackjack_profit
 from utils import bot_control
 from utils.system.notification import notify
 
@@ -100,9 +100,7 @@ class Blackjack(GamblingLifecycle, BaseCog):
         else:
             await self.bot.sleep(self.settings.get_cd())
 
-        amount_to_gamble = int(
-            self.settings.startValue * (self.settings.multiplier**self.turns_lost)
-        )
+        amount_to_gamble = bet_amount("blackjack", self.turns_lost, self.bot)
 
         if self.profit_goal_reached():
             if not self.gamble_flags["goal_reached"]:
@@ -122,26 +120,18 @@ class Blackjack(GamblingLifecycle, BaseCog):
             self.gamble_flags["goal_reached"] = False
 
         # Balance check
-        if (
-            amount_to_gamble > self.bot.stats.balance
-            and self.bot.stats.has_updated_balance
-        ):
+        if self.balance_blocks(amount_to_gamble):
             if not self.gamble_flags["no_balance"]:
                 self.gamble_flags["no_balance"] = True
-                await self.bot.log(
-                    f"Amount to gamble next ({amount_to_gamble}) exceeds bot balance ({self.bot.stats.balance}), stopping blackjack!",
-                    "#4a270c",
-                )
-                notify(
-                    f"Amount to gamble next ({amount_to_gamble}) exceeds bot balance ({self.bot.stats.balance}), stopping blackjack!",
-                    "blackjack - Insufficient balance",
-                )
+                message = f"Tạm dừng Bài 21. Chờ OwO xác nhận đủ {amount_to_gamble:,} cowoncy cho ván tiếp theo."
+                await self.bot.log(message, "#4a270c")
+                notify(message, "Bài 21 · Kiểm tra số dư")
 
-            await self.bot.sleep_till(self.cooldowns.moderateCooldown)
-            return await self.send_blackjack()
+            await self.wait_for_balance()
+            return await self.send_blackjack(startup=True)
         elif self.gamble_flags["no_balance"]:
             await self.bot.log(
-                f"Balance regained! ({self.bot.stats.balance}) - restarting blackjack!",
+                "OwO đã xác nhận đủ tiền cho lượt cược Bài 21 tiếp theo.",
                 "#4a270c",
             )
             self.gamble_flags["no_balance"] = False
@@ -190,7 +180,7 @@ class Blackjack(GamblingLifecycle, BaseCog):
 
         while not_clicked:
             await asyncio.sleep(1.5)
-            if not self.gambling_enabled() or not bot_control.is_running() or self.bot.ch.command_handler_status.captcha:
+            if not self.gambling_enabled() or not bot_control.running_for(self.bot) or self.bot.ch.command_handler_status.captcha:
                 return
             if msg.reactions:
                 for item in msg.reactions:

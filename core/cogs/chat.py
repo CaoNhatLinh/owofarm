@@ -13,15 +13,32 @@
 import asyncio
 import re
 
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from core.cogs._BASE import BaseCog
+from utils.random_chat import RandomChat
 
 
 class Chat(BaseCog):
     def __init__(self, bot):
         super().__init__(bot)
         self.timed_task = None  # track active timed task so we can cancel it
+        self.random_chat = RandomChat(bot)
+
+    @tasks.loop(seconds=1)
+    async def random_chat_loop(self):
+        try:
+            await self.random_chat.tick()
+        except Exception as error:
+            await self.bot.log(f"Random chat: {error}", "#87875f")
+
+    async def cog_load(self):
+        self.random_chat_loop.start()
+
+    async def cog_unload(self):
+        self.random_chat_loop.cancel()
+        if self.timed_task is not None and not self.timed_task.done():
+            self.timed_task.cancel()
 
     @property
     def settings(self):

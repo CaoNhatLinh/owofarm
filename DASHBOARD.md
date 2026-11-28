@@ -1,8 +1,10 @@
 # Điều khiển bot trên web
 
-Mở http://127.0.0.1:1200/ để dùng ngay, không cần mật khẩu. Web chỉ cho phép truy cập cục bộ trên máy chạy bot. Vào Điều khiển → Tài khoản Discord để nhập, hiện/ẩn hoặc thay token và ID kênh. Thay tài khoản đang chạy cần khởi động lại bằng start.bat.
+Mở http://127.0.0.1:1200/ để dùng trên máy chạy bot. Vào **Tài khoản Discord** để thêm tài khoản, xem kết nối hoặc đổi token. Khởi động lại bằng `start.bat` sau khi thêm tài khoản vào bot đang chạy hoặc thay token.
 
-- **Chạy/Dừng bot** áp dụng ngay, giữ web và kết nối Discord để chạy lại.
+Chọn **Tài khoản đang xem** ở đầu trang trước khi chỉnh **Tự động hóa** hoặc **Cá cược**. Bảng điều khiển chỉ lưu các giá trị bạn đã đổi cho tài khoản đó. **Thiết lập mặc định** áp dụng cho các mục chưa chỉnh riêng. Chọn **Dùng lại mặc định** để gỡ các tùy chỉnh và giữ kênh Discord của tài khoản.
+
+- **Chạy/Dừng tài khoản** áp dụng cho tài khoản đang xem. **Chạy/Dừng tất cả** điều khiển toàn bộ bot và giữ các trạng thái tạm dừng riêng.
   Lệnh đã gửi trước khi dừng vẫn có thể nhận kết quả.
 - **Nghỉ khi mất phản hồi** có công tắc riêng. Mặc định: chờ tối đa 20 giây
   cho mỗi lệnh, 3 lần liên tiếp không nhận được phản hồi thì nghỉ 10 phút.
@@ -14,14 +16,28 @@ Mở http://127.0.0.1:1200/ để dùng ngay, không cần mật khẩu. Web ch�
   Bot chờ kết quả trước khi gửi lệnh tiếp theo để không gửi dồn khi OwO im lặng.
 - **Khoảng cách tin nhắn**: thanh kéo 3–60 giây, bước 0,5 giây; đây là khoảng
   tối thiểu. Cooldown riêng của lệnh, slowmode kênh và lịch nghỉ vẫn có hiệu lực.
+  Bot cộng thêm 0,4–2 giây ngẫu nhiên giữa các lần gửi. Lịch lặp từng lệnh
+  cũng thay đổi: tối thiểu 10 giây có thể thành 11, 15 hoặc 20 giây; tối thiểu
+  15 giây có thể thành 15–25 giây. Khoảng đã cấu hình rộng hơn vẫn được giữ.
+  Thỉnh thoảng bot ngừng gửi toàn bộ lệnh trong 2–20 giây; gửi nhanh liên tục
+  6–9 lệnh trong 45 giây cũng kích hoạt khoảng nghỉ này. Mỗi tài khoản có
+  nhịp riêng, thứ tự và mức ưu tiên lệnh được giữ nguyên.
+  Mọi đường gửi dùng chung mốc cooldown tính từ lần gửi thành công, cộng
+  0,5 giây đệm và độ trễ ngẫu nhiên; bí danh lệnh dùng chung mốc. Khi OwO báo
+  còn thời gian chờ, bot lùi lịch theo phản hồi đó. Xem thuật toán và công
+  thức trong [COMMAND_SCHEDULING.md](COMMAND_SCHEDULING.md).
 - **Gửi chữ owo** chỉ điều khiển tin nhắn `owo` riêng lẻ, không tắt hunt/battle.
-- **Thứ tự dùng gem**: cao xuống thấp hoặc thấp lên cao theo độ hiếm,
-  chọn riêng cho từng loại gem còn thiếu. Bỏ qua gem hết số lượng hoặc độ hiếm
-  bị tắt. Áp dụng ở lần dùng gem tiếp theo, không thay gem đang có hiệu lực.
+- **Chat ngẫu nhiên** trong phần **Tự động hóa** có công tắc riêng cho từng
+  tài khoản, mặc định tắt. Bật rồi bấm **Lưu thay đổi** để bot thỉnh thoảng
+  gửi một câu ngắn, khoảng 2–6 phút giữa các lần thử và tránh lặp ba câu gần
+  nhất. Chỉ chat khi hàng đợi rảnh; vẫn giữ khoảng cách tin nhắn, slowmode,
+  lịch nghỉ và CAPTCHA. Tắt công tắc sẽ hủy lần chat đang chờ gửi. Câu có thể
+  trùng lệnh theo tiền tố hiện tại sẽ được bỏ qua.
+- **Đá săn**: chọn dùng cấp cao hoặc cấp thấp trước. **Không dùng từ cấp này trở lên** chặn cả cấp đã chọn và mọi cấp cao hơn. Ví dụ chọn Mythical thì giữ Mythical, Legendary và Fabled trong kho. Mức chặn áp dụng cho đá mới, kể cả lệnh đang chờ gửi.
 - **ID kênh Discord** được lưu dưới dạng chuỗi để giữ chính xác ID dài.
-  Kiểm tra quyền xem/gửi trước khi lưu; kênh không truy cập được sẽ bị từ chối.
+  Kiểm tra quyền xem/gửi trước khi lưu nếu tài khoản đã đăng nhập. Với tài khoản ngoại tuyến, kênh được dùng khi kết nối lần sau.
   Bỏ trống để dùng kênh ban đầu trong cấu hình tài khoản.
-- **Prefix** giữ nguyên mọi dấu cách, kể cả ở đầu/cuối. Ví dụ `o` tạo `oh`,
+- **Tiền tố lệnh** giữ nguyên mọi dấu cách, kể cả ở đầu/cuối. Ví dụ `o` tạo `oh`,
   `owo ` tạo `owo h`. Chỉ đổi cấu hình của ứng dụng; prefix phải khớp OwO
   trong server. Không tự gửi lệnh thay đổi prefix server.
 
@@ -29,6 +45,14 @@ Bấm **Lưu thay đổi** để áp dụng thiết lập. Cấu hình được 
 `config/dashboard.json`, giữ lại sau khi khởi động lại. Kênh/prefix được áp dụng
 trên vòng lặp bot; một lệnh đang gửi có thể kết thúc trước khi chuyển cấu hình.
 Các trường trên web ưu tiên hơn cấu hình prefix trong `config/settings.json`.
+
+## Đội hình và HuntBot
+
+Trong **Tự động hóa → Đội hình và HuntBot**, bật **Tự xếp đội và trang bị** để kiểm tra đội và sở thú khi bắt đầu. Bot điền ô trống, thay thú bằng loài có độ hiếm cao hơn và giữ nguyên khi cùng cấp. Sau khi xác nhận đội, bot chọn vũ khí theo vai trò từng thú. Việc kiểm tra định kỳ vũ khí dùng đội đã xác nhận. Thú mới có thể cải thiện đội mới kích hoạt việc kiểm tra lại.
+
+Khi đã bật cả hai chế độ, **Tự chạy HuntBot** chờ xong đội hình. Mức tối đa dựa trên giới hạn OwO trả về và số dư đã xác nhận. Khi gặp thử thách, bấm **Xác minh HuntBot** trên web để mở tin nhắn Discord. **Tự nâng cấp HuntBot** dùng tinh chất theo cấu hình ưu tiên của HuntBot.
+
+Trong **Kho và giao dịch**, có thể bật bán thú nếu lệnh săn báo thiếu tiền hoặc hiến tế toàn bộ thú đủ điều kiện khi số dư đã xác nhận lớn hơn 5.000 cowoncy. Hai công tắc áp dụng riêng cho tài khoản đang xem.
 
 ## Bán nhanh
 
@@ -46,8 +70,8 @@ chọn. Đổi lựa chọn không gửi lệnh; chỉ gửi khi bấm nút bán
   Việc bán không lấy pet ra khỏi team battle, theo cơ chế của OwO.
 - Hiến tế: gửi `sac` với đúng danh sách mã độ hiếm như bán thú, nhận essence
   thay vì cowoncy; không tự động bật HuntBot hoặc thay đổi lịch hiến tế tự động.
-- Mỗi tài khoản chỉ có một lượt bán đang xử lý. Cùng mã yêu cầu không được
-  gửi lại thành lượt bán mới, kể cả khi kết nối web bị gián đoạn.
+- Mỗi tài khoản chỉ có một lượt bán đang xử lý. Trong cùng một lần chạy ứng dụng,
+  dùng lại mã yêu cầu sẽ trả về lượt bán cũ, kể cả khi kết nối web bị gián đoạn.
 - Có thể bán/hiến tế thủ công ngay cả khi farm đang dừng, không bật lại farm.
   Lệnh thủ công vẫn giữ khoảng cách gửi và chờ phản hồi, không chạy qua hàng
   đợi farm đang dừng. Dừng khi gặp CAPTCHA, nghỉ theo lịch, đổi kênh/prefix
@@ -89,7 +113,7 @@ Trong tab Gamble, công tắc Giới hạn lỗ và ô số cowoncy thua tối �
 
 ### Reset phiên và chuỗi thua
 
-Nút Reset lãi/lỗ & chơi lại trong Gamble đưa lãi/lỗ phiên về 0, gỡ chặn mục tiêu/giới hạn lỗ và reset chuỗi tăng cược về mức ban đầu. Không đổi cấu hình, số dư thực, trạng thái chạy/dừng farm, CAPTCHA hoặc cooldown. Ván đang mở được tính vào phiên mới khi kết thúc. Nếu có nhiều tài khoản, chọn đúng tài khoản trước khi reset. Yêu cầu có mã idempotency để tránh reset hai lần khi lỗi mạng.
+**Đặt lại phiên cược** trong tab **Cá cược** đưa lãi/lỗ và chuỗi thua của tài khoản đang xem về 0. Lượt mới bắt đầu từ mức cược ban đầu, theo số dư, thời gian chờ và trạng thái bot. Ván đang mở được tính vào phiên mới khi có kết quả.
 
 Thống kê Coinflip/Slots/Blackjack hiển thị chuỗi thua hiện tại và kỷ lục từng trò. Thắng reset chuỗi hiện tại, hoà không thay đổi chuỗi. Reset phiên chỉ xóa chuỗi hiện tại; kỷ lục lưu trong utils/data/gamble_streaks.sqlite và giữ qua khởi động lại. Chỉ ghi nhận kết quả từ khi tính năng được cài, không suy ngược các ván cũ.
 

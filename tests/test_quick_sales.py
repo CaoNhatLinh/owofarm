@@ -58,6 +58,18 @@ class SalesApiTests(unittest.TestCase):
         self.assertEqual(self.request(accountId="43",requestId="request-0003").status_code,202)
         self.assertEqual([item["accountId"] for item in self.calls],["42","43"])
 
+    def test_old_receipt_remains_idempotent_after_it_leaves_dashboard_history(self):
+        for index in range(51):
+            request_id = f"sale-{index:05d}"
+            self.assertEqual(self.request(kind="sacrifice", requestId=request_id).status_code, 202)
+            jobs.update(request_id, state="success", sold=4)
+        self.assertEqual(len(jobs.jobs()), 50)
+        self.assertNotIn("sale-00000", {job["id"] for job in jobs.jobs()})
+        retry = self.request(kind="sacrifice", requestId="sale-00000")
+        self.assertEqual(retry.json["job"]["state"], "success")
+        self.assertEqual(retry.json["job"]["sold"], 4)
+        self.assertEqual(len(self.calls), 51)
+
     def test_invalid_requests_are_rejected_but_manual_pause_is_allowed(self):
         for data in [dict(kind="all"),dict(maxRarity="gem"),dict(maxRarity=[]),dict(kind=[]),dict(requestId="bad")]:
             self.assertEqual(self.request(**data).status_code,400)

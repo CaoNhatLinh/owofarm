@@ -21,6 +21,7 @@ from discord.ext import tasks
 from discord.ext.commands import ExtensionNotLoaded
 
 from core.cogs._BASE import BaseCog
+from utils import bot_control
 
 """
 These commands: owo, pray, curse, level - can simply be send at specific intervals
@@ -96,7 +97,7 @@ class Looper(BaseCog):
         return {
             "owo": self.owo_settings.enabled and not self.reaction_bot_settings.owo,
             "level": self.level_settings.enabled,
-            "pray": self.pray_settings.enabled and not pray_curse_reaction,
+            "pray": self.pray_settings.enabled and not pray_curse_reaction and not bot_control.manages_prayer(self.bot),
             "curse": self.curse_settings.enabled and not pray_curse_reaction,
         }
 
@@ -192,8 +193,7 @@ class Looper(BaseCog):
             )
 
     async def send_owo(self):
-        from utils import bot_control
-        if not bot_control.get_settings()["owoEnabled"]:
+        if not bot_control.settings_for(self.bot)["owoEnabled"]:
             return
         cmd = {
             "cmd_name": self.bot.alias["owo"]["normal"],
@@ -207,6 +207,8 @@ class Looper(BaseCog):
         await self.block_till_send(cmd["cmd_name"])
 
     async def send_pray_curse(self, cmd_name):
+        if cmd_name == "pray" and bot_control.manages_prayer(self.bot):
+            return
         cnf = self.get_pray_curse_settings(cmd_name)
         for cmd in {"pray", "curse"}:
             quest_cnf = self.bot.quest_help_request[cmd]
@@ -236,6 +238,8 @@ class Looper(BaseCog):
         if cmd["cmd_arguments"] and getattr(self, f"{cmd_name}_settings").count:
             cmd["cmd_arguments"] += f" {next(self.__dict__[f'{cmd_name}_counter'])}"
 
+        if cmd_name == "pray":
+            cmd["automation_check"] = lambda: not bot_control.manages_prayer(self.bot)
         await self.bot.ch.put_queue(cmd)
         self.startup = False
         full_content = self.bot.settings_dict.prefix + cmd["cmd_name"]

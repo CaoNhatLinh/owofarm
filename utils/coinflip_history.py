@@ -112,5 +112,5 @@ def select_side(bot, mode):
     if mode != "auto":
         return mode
     from utils import bot_control
-    window = bot_control.get_settings()["coinflipHistoryWindow"]
+    window = bot_control.settings_for(bot)["coinflipHistoryWindow"]
     return get_history(bot)._selection(window)["side"]

@@ -27,6 +27,19 @@ class SimulationTests(unittest.TestCase):
         self.assertEqual(doubled["maxStake"],40)
         self.assertEqual(doubled["maxLossStreak"],2)
 
+    def test_bonus_ladder_uses_previous_stake_and_resets_after_win(self):
+        result = self.result("tttthh", "heads-bonus", base=1000)
+        self.assertTrue(result["bonus"])
+        self.assertEqual([point["profit"] for point in result["curve"]],
+                         [0, -1000, -3000, -7200, -16440, 4812, 5812])
+        self.assertEqual(result["maxStake"], 21252)
+
+    def test_bonus_ladder_keeps_the_cap_and_loss_limit(self):
+        capped = self.result("ttttttt", "heads-bonus", base=2000)
+        self.assertEqual((capped["stop"], capped["stopAt"], capped["maxStake"]), ("bet_cap", 7, 102009))
+        limited = self.result("ttttt", "heads-bonus", base=1000, lossLimit=16440)
+        self.assertEqual((limited["stop"], limited["stopAt"], limited["profit"]), ("loss_limit", 5, -16440))
+
     def test_cap_capital_stop_loss_and_goal(self):
         self.assertEqual(self.result("tttttt","heads-double",base=10000)["stop"],"bet_cap")
         poor=self.result("tttt","heads-double",capital=25)
@@ -48,7 +61,7 @@ class SimulationTests(unittest.TestCase):
         self.assertEqual(source,original)
         self.assertEqual(first["warmup"],12)
         self.assertEqual(first["tested"],48)
-        self.assertEqual(len(first["results"]),20)
+        self.assertEqual(len(first["results"]),29)
         self.assertEqual(first["results"],sorted(first["results"],key=lambda r:(r["played"]==0,-r["profit"],r["maxDrawdown"],r["id"])))
 
     def test_probe_costs_and_generator_tiers_are_not_fake_accuracy(self):
@@ -88,7 +101,7 @@ class SimulationApiTests(unittest.TestCase):
             with patch.object(bot_control,"get_runtimes",return_value=[dict(accountId="123")]),patch.object(coinflip_history,"load",return_value=coinflip_history.History(rows("thth"))),patch.object(bot_control,"update_settings") as save:
                 response=client.post("/api/gamble/simulate",json=inputs(),headers={"password":"test"})
                 self.assertEqual(response.status_code,200)
-                self.assertEqual(len(response.json["results"]),20)
+                self.assertEqual(len(response.json["results"]),29)
                 save.assert_not_called()
             with patch.object(bot_control,"get_runtimes",return_value=[]):
                 self.assertEqual(client.post("/api/gamble/simulate",json=inputs(),headers={"password":"test"}).status_code,400)

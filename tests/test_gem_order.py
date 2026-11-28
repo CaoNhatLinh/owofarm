@@ -16,8 +16,8 @@ class GemOrderTests(unittest.TestCase):
         self.cog = Gems(bot)
         self.stock = {tier:{gem:0 for gem in ids} for tier,ids in gem_tiers.items()}
 
-    def choose(self, order):
-        with patch("utils.bot_control.get_settings",return_value={"gemOrder":order}):
+    def choose(self, order, skip="none"):
+        with patch("utils.bot_control.get_settings", return_value={"gemOrder": order, "gemSkipAtOrAbove": skip}):
             return self.cog.find_gems_to_use(self.stock)
 
     def test_lowest_first_is_per_type_even_with_mixed_tier_stock(self):
@@ -31,6 +31,26 @@ class GemOrderTests(unittest.TestCase):
             self.stock[tier] = {gem:2 for gem in self.stock[tier]}
         self.assertEqual(self.choose("high_to_low"),["057","071","078","085"])
         self.assertEqual(self.choose("low_to_high"),["051","065","072","079"])
+
+    def test_cap_starts_at_the_selected_rarity_in_both_orders(self):
+        self.stock["common"]["051"] = 1
+        self.stock["uncommon"]["052"] = 1
+        self.stock["rare"].update({"053": 1, "067": 1})
+        self.stock["fabled"]["078"] = 1
+        self.assertEqual(self.choose("high_to_low", "rare"), ["052"])
+        self.assertEqual(self.choose("low_to_high", "rare"), ["051"])
+        self.assertIsNone(self.choose("high_to_low", "common"))
+
+    def test_malformed_active_gem_is_not_replaced_and_zero_is_expired(self):
+        active, missing = self.cog.fetch_gems_in_use(
+            "Player, hunt is empowered by <:cgem1:123> <:ugem3:456>`[0/100]` <:egem4:789>`[212/450]`!"
+        )
+        self.assertTrue(missing)
+        self.assertEqual({gem["gem_type"] for gem in active}, {"huntGem", "luckyGem"})
+        active, missing = self.cog.fetch_gems_in_use(
+            "Player, hunt is empowered by <:custom:123>`[2/100]` <:egem4:789>`[0/450]`!"
+        )
+        self.assertEqual((active, missing), ([], False))
 
     def test_disabled_tiers_and_types_are_preserved(self):
         self.stock["fabled"].update({"057":3,"071":3})

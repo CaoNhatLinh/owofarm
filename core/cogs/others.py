@@ -17,6 +17,8 @@ import re
 from discord.ext import commands
 
 from core.cogs._BASE import BaseCog
+from core.cogs.sell import CASH_BALANCE, is_economy_message_for_account, normalize_economy_content
+from utils.gambling_control import confirm_wallet
 from utils.misc import check_list_index
 from utils.timestamp import (
     calc_time_till_event,
@@ -112,11 +114,10 @@ class Others(BaseCog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
-        nick = self.bot.get_nick(message)
         if not message.author.id == self.bot.owo_bot_id:
             return
 
-        if message.channel.id == self.bot.cm.id:
+        if self.bot.cm and message.channel.id == self.bot.cm.id:
             # Accept Rules
             if (
                 "**you must accept these rules to use the bot!**"
@@ -129,31 +130,27 @@ class Others(BaseCog):
                 ):
                     await message.components[0].children[0].click()
 
+            content = normalize_economy_content(message.content)
+            balance = CASH_BALANCE.search(content)
+            if balance:
+                if is_economy_message_for_account(self.bot, message, content[:balance.start()]):
+                    amount = int(balance[1].replace(",", ""))
+                    if confirm_wallet(self.bot, message.id, amount):
+                        if self.bot.settings_dict.cashCheck:
+                            self.bot.update_cash(amount, override=True)
+                        await self.bot.log(f"Has {amount} cowoncy!", "#d787d7")
+                        await self.bot.ch.remove_queue(id="cash")
+                return
+
+            nick = self.bot.get_nick(message)
             if (
                 nick not in message.content
                 and self.bot.user.display_name not in message.content
             ):
                 return
 
-            # Cash Check
-            if "you currently have **__" in message.content and nick in message.content:
-                """task: add checks for cash at ready."""
-                self.bot.update_cash(
-                    int(
-                        re.search(
-                            r"(\d{1,3}(?:,\d{3})*)(?= cowoncy)",
-                            re.sub(r"[*_]", "", message.content),
-                        )
-                        .group(0)
-                        .replace(",", "")
-                    ),
-                    override=True,
-                )
-                await self.bot.log(f"Has {self.bot.stats.balance} cowoncy!", "#d787d7")
-                await self.bot.ch.remove_queue(id="cash")
-
             # Lootbox and Crate
-            elif (
+            if (
                 "** You received a **weapon crate**!" in message.content
                 or "You found a **weapon crate**!" in message.content
             ):
@@ -188,9 +185,12 @@ class Others(BaseCog):
 
             # Add animals to team
             elif "Create one with `owo team add {animal}`" in message.content:
+                from utils import bot_control
                 weapons = getattr(self.bot.settings_dict, "autoWeapons", None)
-                if weapons and weapons.enabled and getattr(weapons, "bootstrapFirstPet", False):
-                    return  # The equipment cog owns the confirmed first-pet bootstrap.
+                if bot_control.settings_for(self.bot).get("teamSetupEnabled") or (
+                    weapons and weapons.enabled and getattr(weapons, "bootstrapFirstPet", False)
+                ):
+                    return  # The team and equipment cog owns team creation in these modes.
                 await self.bot.ch.set_stat(False)
                 self.zoo = True
                 team_cmd = {

@@ -11,6 +11,10 @@ from core.command_handler import CommandHandler
 
 
 class FarmSettingsTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.object(bot_control, "_settings", dict(bot_control.DEFAULTS)))
+        self.enterContext(patch.object(bot_control, "_account_settings", {}))
+
     def test_switches_independent_strict_and_persistent(self):
         for key in ("huntEnabled","battleEnabled"):
             for bad in (0,1,"true",None):

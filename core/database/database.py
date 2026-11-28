@@ -21,6 +21,9 @@ from . import worker
 
 # Thankfully Database class won't be touching this, would have been a mess otherwise!
 database_handler = worker.databaseWorker()
+COWONCY_DATE_KEY = "cowoncy_earnings_last_checked"
+SAVE_COWONCY_DATE = "INSERT OR REPLACE INTO meta_data (key, value) VALUES (?, ?)"
+RESET_COWONCY_EARNINGS = "UPDATE cowoncy_earnings SET earnings = 0 WHERE user_id = ?"
 
 
 def log_stats_if_required(func):
@@ -36,6 +39,11 @@ class Database:
     def __init__(self, client):
         # We pass a "reference" here
         self.client = client
+        self._cowoncy_day = None
+        self._last_net_earnings = 0
+
+    def _cowoncy_date_key(self):
+        return f"{COWONCY_DATE_KEY}:{self.client.user.id}"
 
     async def update_priorities(self):
         # Check if already in db
@@ -76,17 +84,26 @@ class Database:
 
     def update_cash_db(self):
         hr = utils.get_hour()
+        today = utils.get_date()
+        user_id = self.client.user.id
+        if self._cowoncy_day is not None and self._cowoncy_day != today:
+            # The client has already applied the first change of the new day.
+            self.client.stats.net_earnings -= self._last_net_earnings
+            database_handler.update_database(RESET_COWONCY_EARNINGS, (user_id,))
+            database_handler.update_database(SAVE_COWONCY_DATE, (self._cowoncy_date_key(), today))
+            self._cowoncy_day = today
+        self._last_net_earnings = self.client.stats.net_earnings
 
         database_handler.update_database(
             """UPDATE cowoncy_earnings
             SET earnings = ?
             WHERE user_id = ? AND hour = ?""",
-            (self.client.stats.net_earnings, self.client.user.id, hr),
+            (self._last_net_earnings, user_id, hr),
         )
 
         database_handler.update_database(
             "UPDATE user_stats SET cowoncy = ? WHERE user_id = ?",
-            (self.client.stats.balance, self.client.user.id),
+            (self.client.stats.balance, user_id),
         )
 
     @log_stats_if_required
@@ -171,20 +188,22 @@ class Database:
 
     async def populate_cowoncy_earnings(self, update=False):
         today_str = utils.get_date()
+        user_id = self.client.user.id
+        date_key = self._cowoncy_date_key()
 
         for i in range(24):
             if not update:
                 await database_handler.update_database_async(
                     "INSERT OR IGNORE INTO cowoncy_earnings (user_id, hour, earnings) VALUES (?, ?, ?)",
-                    (self.client.user.id, i, 0),
+                    (user_id, i, 0),
                 )
 
         rows = await database_handler.get_from_db(
-            "SELECT value FROM meta_data WHERE key = ?",
-            ("cowoncy_earnings_last_checked",),
+            "SELECT key, value FROM meta_data WHERE key IN (?, ?)",
+            (date_key, COWONCY_DATE_KEY),
         )
-
-        last_reset_str = rows[0]["value"] if rows else "0"
+        dates = {row["key"]: row["value"] for row in rows}
+        last_reset_str = dates.get(date_key, dates.get(COWONCY_DATE_KEY))
 
         if last_reset_str == today_str:
             # Handle gap between cowoncy chart
@@ -193,7 +212,7 @@ class Database:
             for hr in range(cur_hr + 1):
                 hr_row = await database_handler.get_from_db(
                     "SELECT earnings FROM cowoncy_earnings WHERE user_id = ? AND hour = ?",
-                    (self.client.user.id, hr),
+                    (user_id, hr),
                 )
                 # Note: negative values are allowed.
                 if hr_row and hr_row[0]["earnings"] != 0:
@@ -201,21 +220,14 @@ class Database:
                 elif last_cash != 0:
                     await database_handler.update_database_async(
                         "UPDATE cowoncy_earnings SET earnings = ? WHERE hour = ? AND user_id = ?",
-                        (last_cash, hr, self.client.user.id),
+                        (last_cash, hr, user_id),
                     )
-            # Return once done as we don't want reset.
-            return
+        else:
+            await database_handler.update_database_async(RESET_COWONCY_EARNINGS, (user_id,))
 
-        for i in range(24):
-            await database_handler.update_database_async(
-                "UPDATE cowoncy_earnings SET earnings = 0 WHERE user_id = ? AND hour = ?",
-                (self.client.user.id, i),
-            )
-
-        await database_handler.update_database_async(
-            "UPDATE meta_data SET value = ? WHERE key = ?",
-            (today_str, "cowoncy_earnings_last_checked"),
-        )
+        if dates.get(date_key) != today_str:
+            await database_handler.update_database_async(SAVE_COWONCY_DATE, (date_key, today_str))
+        self._cowoncy_day = today_str
 
     async def fetch_net_earnings(self):
         self.client.stats.net_earnings = 0
@@ -230,6 +242,7 @@ class Database:
             if item != 0:
                 self.client.stats.net_earnings = item
                 break
+        self._last_net_earnings = self.client.stats.net_earnings
 
     async def reset_gamble_wins_or_losses(self):
         today_str = utils.get_date()

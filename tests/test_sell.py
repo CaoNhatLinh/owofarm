@@ -7,6 +7,7 @@ from unittest.mock import patch
 from core.cogs.commands import Commands
 from core.cogs.sell import Sell
 from core.command_handler import CommandHandler
+from utils import bot_control
 
 sell_module = importlib.import_module("core.cogs.sell")
 commands_module = importlib.import_module("core.cogs.commands")
@@ -48,19 +49,24 @@ class FakeBot:
         self.animal_rank_in_zoo = {"common": True, "uncommon": True}
         self.misc = {
             "command_info": {
-                name: {"log_color": "white"} for name in ("sell", "sac")
+                name: {"log_color": "white"} for name in ("cash", "sell", "sac")
             }
         }
         self.db = SimpleNamespace(update_cmd_db=lambda command_id: None)
         self.ch = CommandHandler(self)
-        self.ch.cmd_priorities = {"sell": 1, "sac": 1}
+        self.ch.cmd_priorities = {"cash": 1, "sell": 1, "sac": 1}
         self.logs = []
         self.sent = []
         self.cash_updates = []
         self.on_sleep = None
+        self.seller = None
+        self.huntbot = None
+
+    def get_cog(self, name):
+        return {"Sell": self.seller, "Huntbot": self.huntbot}.get(name)
 
     def get_nick(self, message):
-        return "Hai131323"
+        return "ExamplePlayer"
 
     async def sleep_till(self, delay):
         if self.on_sleep and delay == [10, 15]:
@@ -77,7 +83,10 @@ class FakeBot:
         self.logs.append(message)
 
     async def send(self, message, color, channel=None, **kwargs):
+        if (check := kwargs.get("automation_check")) is not None and not check():
+            return False
         self.sent.append(message)
+        return True
 
     def update_cash(self, amount):
         self.cash_updates.append(amount)
@@ -98,6 +107,17 @@ class SellTests(unittest.TestCase):
         self.addCleanup(self.wall_clock.stop)
         self.bot = FakeBot()
         self.seller = Sell(self.bot)
+        self.bot.seller = self.seller
+        self.flags = {
+            **bot_control.DEFAULTS,
+            "huntEnabled": True,
+            "huntEmergencySellEnabled": True,
+            "zooSacrificeSurplusEnabled": False,
+            "teamSetupEnabled": False,
+        }
+        flags_patch = patch.object(bot_control, "settings_for", return_value=self.flags)
+        flags_patch.start()
+        self.addCleanup(flags_patch.stop)
 
     def complete(self, coroutine):
         # Fake operations finish immediately, so tests need no event loop or sockets.
@@ -113,7 +133,7 @@ class SellTests(unittest.TestCase):
         return SimpleNamespace(
             id=message_id,
             content=content
-            or "**🔪 | HAI131323**, you don't have enough cowoncy to hunt! >:c",
+            or "**🔪 | EXAMPLEPLAYER**, you don't have enough cowoncy to hunt! >:c",
             author=SimpleNamespace(
                 id=self.bot.owo_bot_id if author_id is None else author_id
             ),
@@ -122,8 +142,12 @@ class SellTests(unittest.TestCase):
             ),
         )
 
-    def notify(self, **kwargs):
-        self.complete(self.seller.on_message(self.message(**kwargs)))
+    def notify(self, *, request="owo h", message_id=1, **kwargs):
+        if request:
+            self.complete(self.seller.on_message(self.message(
+                content=request, message_id=message_id * 10, author_id=self.bot.user.id
+            )))
+        self.complete(self.seller.on_message(self.message(message_id=message_id * 10 + 1, **kwargs)))
 
     def tick(self):
         self.complete(self.seller.initiate_loop.coro(self.seller))
@@ -147,7 +171,7 @@ class SellTests(unittest.TestCase):
         self.tick()
         self.assertTrue(self.bot.ch.queue.empty())
         self.assertEqual(self.seller.sac_lastran, 0)
-        self.assertTrue(self.seller.get_command("sac")["checks"])
+        self.assertFalse(self.seller.get_command("sac")["checks"])
 
     def test_emergency_sale_bypasses_periodic_timer_and_resets_it(self):
         self.clock.now += 10
@@ -166,12 +190,12 @@ class SellTests(unittest.TestCase):
 
     def test_known_money_patterns_and_account_identifiers(self):
         cases = [
-            "**HAI131323**, you don't have enough money!",
+            "**EXAMPLEPLAYER**, you don't have enough money!",
             "**display name**, you do not have enough cash to hunt!",
             "**ACCOUNT_NAME**, you have insufficient cowoncy!",
             "<@!123456789012345678>, not enough cowoncy!",
             "123456789012345678: insufficient money!",
-            "**Hai131323**, you don’t have enough <:cowoncy:416043450337853441>!",
+            "**ExamplePlayer**, you don’t have enough <:cowoncy:416043450337853441>!",
         ]
         for index, content in enumerate(cases):
             with self.subTest(content=content):
@@ -184,13 +208,13 @@ class SellTests(unittest.TestCase):
             {"author_id": 999},
             {"channel_id": 999},
             {"content": "**OtherPlayer**, you don't have enough cowoncy!"},
-            {"content": "**OtherHai131323**, you don't have enough cowoncy!"},
-            {"content": "**OtherPlayer**, you don't have enough money to help Hai131323!"},
-            {"content": "**Hai131323**, something went wrong!"},
-            {"content": "**Hai131323**, you don't have enough animals! >:c"},
-            {"content": "**Hai131323**, you don't have enough WP!"},
-            {"content": "**Hai131323**, you don't have enough weapon shards. Your cowoncy is low."},
-            {"content": "**Hai131323**, you don't have enough cowoncy for this weapon!"},
+            {"content": "**OtherExamplePlayer**, you don't have enough cowoncy!"},
+            {"content": "**OtherPlayer**, you don't have enough money to help ExamplePlayer!"},
+            {"content": "**ExamplePlayer**, something went wrong!"},
+            {"content": "**ExamplePlayer**, you don't have enough animals! >:c"},
+            {"content": "**ExamplePlayer**, you don't have enough WP!"},
+            {"content": "**ExamplePlayer**, you don't have enough weapon shards. Your cowoncy is low."},
+            {"content": "**ExamplePlayer**, you don't have enough cowoncy for this weapon!"},
         ]
         for index, kwargs in enumerate(cases):
             with self.subTest(kwargs=kwargs):
@@ -219,9 +243,9 @@ class SellTests(unittest.TestCase):
         self.assertEqual(self.seller.sac_lastran, 0)
 
     def test_disabled_or_empty_emergency_settings_do_not_sell(self):
-        self.bot.settings_dict.animal.emergencySell.enabled = False
+        self.flags["huntEmergencySellEnabled"] = False
         self.notify()
-        self.bot.settings_dict.animal.emergencySell.enabled = True
+        self.flags["huntEmergencySellEnabled"] = True
         self.bot.settings_dict.animal.emergencySell.rarities = ["epic"]
         self.notify(message_id=2)
         self.assertTrue(self.bot.ch.queue.empty())
@@ -238,7 +262,7 @@ class SellTests(unittest.TestCase):
         self.assertEqual(self.consume()["cmd_arguments"], "c u r")
 
     def test_refused_queue_does_not_record_an_emergency_success(self):
-        async def refuse(command):
+        async def refuse(command, **kwargs):
             return None
 
         self.bot.ch.put_queue = refuse
@@ -258,7 +282,8 @@ class SellTests(unittest.TestCase):
         self.clock.now = 8202
 
         async def trigger_emergency():
-            await self.seller.on_message(self.message())
+            await self.seller.on_message(self.message(content="owo h", author_id=self.bot.user.id))
+            await self.seller.on_message(self.message(message_id=2))
 
         self.bot.on_sleep = trigger_emergency
         self.tick()
@@ -278,10 +303,116 @@ class SellTests(unittest.TestCase):
 
     def test_existing_sale_confirmation_still_updates_cash(self):
         self.notify(
-            content="**🔪 | hai131323** sold **<:common:416520037713838081>x9** "
+            content="**🔪 | exampleplayer** sold **<:common:416520037713838081>x9** "
             "for a total of **<:cowoncy:416043450337853441> 30**"
         )
         self.assertEqual(self.bot.cash_updates, [30])
+        self.assertTrue(self.bot.ch.queue.empty())
+
+    def test_unrelated_requests_and_stale_hunt_responses_cannot_trigger_emergency_sale(self):
+        self.notify(request="owo cf 200")
+        self.notify(request="owo hb", message_id=2)
+        self.notify(request="owo buy 1", message_id=3)
+        self.notify(request=None, message_id=4)
+        self.complete(self.seller.on_message(self.message(
+            content="owo h", message_id=50, author_id=self.bot.user.id
+        )))
+        self.clock.now += self.flags["responseTimeout"] + 1
+        self.notify(request=None, message_id=5)
+        self.assertTrue(self.bot.ch.queue.empty())
+
+    def test_surplus_requires_fresh_owned_balance_and_more_than_threshold(self):
+        def cash_reply(amount, **kwargs):
+            self.notify(content=f"**EXAMPLEPLAYER**, you currently have **__{amount}__ cowoncy!**", **kwargs)
+
+        cash_reply("6,000", request="owo cash")
+        self.assertTrue(self.bot.ch.queue.empty())
+        self.flags["zooSacrificeSurplusEnabled"] = True
+        cash_reply("6,000", request="owo h", message_id=2)
+        cash_reply("5,000", request="owo cash", message_id=3)
+        self.notify(request="owo cash", message_id=4, content="**OtherPlayer**, you currently have **__6,000__ cowoncy!**")
+        self.assertTrue(self.bot.ch.queue.empty())
+        cash_reply("5,001", request="owo cash", message_id=5)
+        command = self.consume()
+        self.assertEqual((command["cmd_name"], command["cmd_arguments"]), ("sac", "all"))
+        self.assertFalse(command["checks"])
+        self.assertTrue(self.seller.allows_queued_command(command))
+        cash_reply("5,001", request=None, message_id=5)
+        self.assertTrue(self.bot.ch.queue.empty())
+        self.clock.now += sell_module.BALANCE_CHECK_INTERVAL + 11
+        self.assertFalse(self.seller.allows_queued_command(command))
+
+    def test_surplus_waits_for_team_and_paces_balance_checks(self):
+        self.flags.update(zooSacrificeSurplusEnabled=True, teamSetupEnabled=True)
+        self.tick()
+        self.assertTrue(self.bot.ch.queue.empty())
+        self.bot._team_setup_ready = True
+        self.bot.huntbot = SimpleNamespace(pending=("start", 5000))
+        self.tick()
+        self.assertTrue(self.bot.ch.queue.empty())
+        self.bot.huntbot.pending = None
+        self.bot.response_guard.huntbot_captcha = {"messageId": "123"}
+        self.tick()
+        self.assertTrue(self.bot.ch.queue.empty())
+        self.bot.response_guard.huntbot_captcha = None
+        self.tick()
+        self.assertEqual(self.consume()["id"], "cash")
+        self.tick()
+        self.assertTrue(self.bot.ch.queue.empty())
+        self.clock.now += sell_module.BALANCE_CHECK_INTERVAL
+        self.tick()
+        self.assertEqual(self.consume()["id"], "cash")
+
+    def test_legacy_sacrifice_is_not_retried_and_respects_a_changed_mode(self):
+        self.bot.settings_dict.animal.sac.enabled = True
+        counted = []
+        self.bot.db.update_cmd_db = counted.append
+        commands = Commands(self.bot)
+        self.tick()
+        self.assertEqual(self.bot.ch.queue.qsize(), 1)
+        self.flags["zooSacrificeSurplusEnabled"] = True
+        self.complete(commands.send_commands.coro(commands))
+        self.assertEqual(self.bot.sent, [])
+        self.assertEqual(counted, [])
+        self.assertFalse(self.bot.ch.checks)
+
+        self.flags["zooSacrificeSurplusEnabled"] = False
+        self.bot.settings_dict.animal.sell.enabled = False
+        self.bot.ch.cmds_state["global"]["last_ran"] = self.clock.now
+        self.clock.now += 7300
+        self.tick()
+        self.complete(commands.send_commands.coro(commands))
+        self.assertEqual(self.bot.sent, ["owo sac c u"])
+        self.assertEqual(counted, ["sac"])
+        self.assertFalse(self.bot.ch.checks)
+        self.tick()
+        self.assertTrue(self.bot.ch.queue.empty())
+
+    def test_queued_surplus_rechecks_setting_balance_and_channel_before_sending(self):
+        self.flags["zooSacrificeSurplusEnabled"] = True
+        commands = Commands(self.bot)
+        self.notify(request="owo cash", content="**ExamplePlayer**, you currently have **__5,500__ cowoncy!**")
+        self.flags["zooSacrificeSurplusEnabled"] = False
+        self.complete(commands.send_commands.coro(commands))
+        self.assertEqual(self.bot.sent, [])
+        self.flags["zooSacrificeSurplusEnabled"] = True
+        self.notify(request="owo cash", content="**ExamplePlayer**, you currently have **__5,600__ cowoncy!**", message_id=2)
+        self.clock.now += 6
+        self.bot.stats = SimpleNamespace(has_updated_balance=True, balance=5000)
+        self.complete(commands.send_commands.coro(commands))
+        self.assertEqual(self.bot.sent, [])
+        self.notify(request="owo cash", content="**ExamplePlayer**, you currently have **__6,000__ cowoncy!**", message_id=3)
+        self.clock.now += 6
+        self.bot.stats.balance = 6000
+        self.bot.cm.id += 1
+        self.complete(commands.send_commands.coro(commands))
+        self.assertEqual(self.bot.sent, [])
+        self.notify(request="owo cash", content="**ExamplePlayer**, you currently have **__6,000__ cowoncy!**", message_id=4)
+        self.clock.now += 6
+        self.complete(commands.send_commands.coro(commands))
+        self.assertEqual(self.bot.sent, ["owo sac all"])
+        self.assertEqual(self.seller.sac_lastran, self.clock.now)
+        self.tick()
         self.assertTrue(self.bot.ch.queue.empty())
 
 

@@ -1,12 +1,14 @@
 """Independent hunt/battle switches, including queued retries and direct sends."""
 import asyncio
+from time import monotonic
+
 from utils import bot_control
 
 FARMS = ("hunt", "battle")
 
 
-def enabled(command):
-    return bot_control.get_settings().get(command + "Enabled", True) if command in FARMS else True
+def enabled(command, bot=None):
+    return bot_control.settings_for(bot).get(command + "Enabled", True) if command in FARMS else True
 
 
 def command_kind(message, prefix, aliases):
@@ -23,15 +25,32 @@ def command_kind(message, prefix, aliases):
     return None
 
 
-def command_allowed(message, prefix, aliases):
-    return enabled(command_kind(message, prefix, aliases))
+def command_allowed(message, prefix, aliases, bot=None):
+    return enabled(command_kind(message, prefix, aliases), bot)
+
+
+def cooldown_remaining(bot, kind):
+    last_sent = getattr(bot, "_farm_sent_at", {}).get(kind)
+    if last_sent is None:
+        return 0
+    commands = getattr(bot.settings_dict, "commands", None)
+    cooldown = getattr(getattr(commands, kind, None), "cooldown", ())
+    minimum = cooldown[0] if cooldown else 15
+    return max(0, minimum - (monotonic() - last_sent))
+
+
+def mark_sent(bot, kind):
+    if kind in FARMS:
+        if not hasattr(bot, "_farm_sent_at"):
+            bot._farm_sent_at = {}
+        bot._farm_sent_at[kind] = monotonic()
 
 
 def apply_flags(bot):
     commands = getattr(bot.settings_dict, "commands", None)
     if commands:
         for kind in FARMS:
-            getattr(commands, kind).enabled = enabled(kind)
+            getattr(commands, kind).enabled = enabled(kind, bot)
 
 
 async def sync(bot):
@@ -40,7 +59,7 @@ async def sync(bot):
     from utils.gambling_control import discard
     apply_flags(bot)
     previous = getattr(bot, "_farm_switches", {})
-    current = {kind: enabled(kind) for kind in FARMS}
+    current = {kind: enabled(kind, bot) for kind in FARMS}
     reaction = bot.settings_dict.cooldowns.reactionBot.huntAndBattle
     for kind, state in current.items():
         if not state:

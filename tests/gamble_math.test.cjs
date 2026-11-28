@@ -68,3 +68,30 @@ test('no valid stake is offered if minimum capital or per-bet cap fails',()=>{
     assert.equal(recommend(1000000000000,true,18).base,0n);
     assert.equal(recommend(1000000000000,true,18).capImpossible,true);
 });
+
+test('Coinflip bonus increases every multiplier and floors every wager',()=>{
+    const projection=project(101,true,4,null,true);
+    assert.deepEqual(projection.rows.map(row=>row.stake),[101n,202n,424n,932n]);
+    assert.equal(projection.total,1659n);
+    assert.equal(projection.next,2143n);
+    assert.equal(projection.capital,3802n);
+    assert.deepEqual(project(101,false,4,1000,true),project(101,false,4,1000));
+});
+
+test('Coinflip bonus recommendation accounts for rounding at the loss-limit boundary',()=>{
+    const result=recommend(1000,true,3,46,true);
+    assert.equal(result.base,2n);
+    assert.equal(result.calculation.capital,31n);
+    assert.equal(project(3,true,3,46,true).maxBase,2n);
+    assert.equal(project(3,true,3,46,true).capital,47n);
+    const exact=recommend(1000,true,3,47,true);
+    assert.equal(exact.base,3n);
+    assert.equal(exact.calculation.capital,47n);
+});
+
+test('Coinflip bonus recommendation accounts for rounding at the next-bet cap',()=>{
+    const result=recommend(1000000,true,2,null,true);
+    assert.equal(result.base,59524n);
+    assert.equal(result.calculation.next,250000n);
+    assert.equal(project(59525,true,2,null,true).nextAboveCap,true);
+});

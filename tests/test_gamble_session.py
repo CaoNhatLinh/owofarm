@@ -4,8 +4,9 @@ import unittest
 from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace as NS
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
+from core.cogs.coinflip import Coinflip
 from utils import bot_control, gamble_session
 from utils.gamble_pacing import GamblePacing
 from website import website
@@ -57,6 +58,54 @@ class StreakTests(unittest.TestCase):
 
 
 class ResetTests(unittest.IsolatedAsyncioTestCase):
+    async def test_disk_failure_does_not_leave_a_partially_reset_session(self):
+        tracker = gamble_session.Streaks({"slots": 4}, {"slots": 3})
+        slots = NS(turns_lost=3, exceeded_max_amount=False, gamble_flags={"amount_exceeded": True})
+        bot = NS(stats=NS(gain_or_lose=-5500), gamble_streaks=tracker, user=NS(id=42),
+                 _persist_gamble_streaks=True, _gamble_loss_latch=5500, response_guard=NS(tick=Mock()),
+                 get_cog=lambda name: slots if name == "Slots" else None, log=AsyncMock())
+        with patch.object(gamble_session, "save_state", side_effect=sqlite3.OperationalError("disk full")):
+            result = await gamble_session.reset_session(bot)
+        self.assertEqual(result["streaks"]["slots"], {"current": 0, "best": 4})
+        self.assertEqual(bot.stats.gain_or_lose, 0)
+        self.assertEqual(slots.turns_lost, 0)
+        self.assertFalse(slots.gamble_flags["amount_exceeded"])
+        self.assertIsNone(bot._gamble_loss_latch)
+        bot.log.assert_awaited_once()
+
+    async def test_coinflip_rechecks_balance_after_cash_refresh_and_reset(self):
+        config = {**bot_control.DEFAULTS, "coinflipEnabled": True, "coinflipBet": 450,
+                  "coinflipDoubleOnLoss": True, "coinflipBonusOnLoss": True, "coinflipSide": "tails"}
+        bot = NS(
+            alias={"coinflip": {"normal": "cf"}},
+            stats=NS(balance=8542, has_updated_balance=True, gain_or_lose=450),
+            settings_dict=NS(gamble=NS(goals=NS(amount=30000), allottedAmount=20000),
+                             cooldowns=NS(briefCooldown=[1, 2], moderateCooldown=[70, 200])),
+            gamble_streaks=gamble_session.Streaks(), response_guard=NS(tick=Mock()),
+            ch=NS(put_queue=AsyncMock()), sleep_till=AsyncMock(), log=AsyncMock(),
+        )
+        cog = Coinflip(bot)
+        cog.turns_lost = 4
+        bot.get_cog = lambda name: cog if name == "Coinflip" else None
+
+        async def update_session(delay):
+            self.assertEqual(delay, 0.5)
+            bot.ch.put_queue.assert_not_awaited()
+            if sleep.await_count == 1:
+                bot.stats.balance = 8422  # The fresh balance still cannot cover the escalated bet.
+            else:
+                self.assertEqual(sleep.await_count, 2)
+                await gamble_session.reset_session(bot)
+
+        with patch.object(bot_control, "get_settings", return_value=config), \
+                patch("core.cogs.coinflip.notify"), patch("asyncio.sleep", side_effect=update_session) as sleep:
+            await cog.start_cf(startup=True)
+
+        self.assertEqual(sleep.await_count, 2)
+        self.assertEqual(cog.turns_lost, 0)
+        bot.ch.put_queue.assert_awaited_once()
+        self.assertEqual(bot.ch.put_queue.await_args.args[0]["cmd_arguments"], "450 tails")
+
     async def test_reset_clears_profit_and_doubling_but_keeps_balance_records_and_guards(self):
         old_running=bot_control.is_running()
         self.addCleanup(bot_control.set_running,old_running)

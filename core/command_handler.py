@@ -72,7 +72,7 @@ class CommandHandler:
         Commands must not be send in these cases
         """
         return (
-            not bot_control.is_running()
+            not bot_control.running_for(getattr(self, "client", None))
             or bool(getattr(getattr(self, "client", None), "response_guard", None) and self.client.response_guard.cooling_down)
             or not self.command_handler_status.state
             or self.command_handler_status.hold_handler
@@ -86,7 +86,7 @@ class CommandHandler:
         Some commands are required to be send quickly. So if its just
         """
         return (
-            bot_control.is_running()
+            bot_control.running_for(getattr(self, "client", None))
             and not bool(getattr(getattr(self, "client", None), "response_guard", None) and self.client.response_guard.cooling_down)
             and not self.command_handler_status.sleep
             and not self.command_handler_status.hold_handler
@@ -94,16 +94,18 @@ class CommandHandler:
         )
 
     @suppress_and_log("Attempting to append queue")
-    async def put_queue(self, cmd_data, priority=False, quick=False):
+    async def put_queue(self, cmd_data, priority=False, quick=False, *, wait=True, retry=False):
         from utils.gambling_control import enabled
         while self.should_not_send:
-            if not enabled(cmd_data.get("id")):
+            if not enabled(cmd_data.get("id"), self.client):
                 return
             if priority and self.can_send_if_priority:
                 break
+            if not wait:
+                return False
             await asyncio.sleep(self.client.random.uniform(1.4, 2.9))
 
-        if not enabled(cmd_data.get("id")):
+        if not enabled(cmd_data.get("id"), self.client):
             return
         if self.cmds_state[cmd_data["id"]]["in_queue"]:
             # Add exception for custom commands
@@ -126,8 +128,15 @@ class CommandHandler:
             return
 
         async with self._hold_or_create_lock():
-            if not enabled(cmd_data.get("id")):
+            if not enabled(cmd_data.get("id"), self.client):
                 return
+            if not wait and self.should_not_send and not (priority and self.can_send_if_priority):
+                return False
+            if retry and cmd_data not in self.checks:
+                return False
+            state = self.cmds_state[cmd_data["id"]]
+            if state["in_queue"] and cmd_data["id"] != "customcommand":
+                return False
             await self.queue.put(
                 (
                     priority_int,  # Priority to sort commands with
@@ -135,7 +144,10 @@ class CommandHandler:
                     deepcopy(cmd_data),  # actual data
                 )
             )
-            self.cmds_state[cmd_data["id"]]["in_queue"] = True
+            state["in_queue"] = True
+            if retry:
+                self.checks.remove(cmd_data)
+            return True
 
     @suppress_and_log("Remove Queue")
     async def remove_queue(self, cmd_data=None, id=None):
@@ -179,7 +191,6 @@ class CommandHandler:
             self.cmds_state[id]["last_ran"] = time.time()
             if not reactionBot:
                 self.cmds_state[id]["in_queue"] = False
-            self.client.db.update_cmd_db(id)
 
     async def set_stat(self, value):
         if value:

@@ -132,7 +132,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.bot.ch.command_handler_status.state = True
 
         calls = 0
-        async def fetch_team():
+        async def fetch_team(**kwargs):
             nonlocal calls
             calls += 1
             if calls == 1:
@@ -146,14 +146,14 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.cog._fetch_team = AsyncMock(side_effect=fetch_team)
         self.cog._fetch_inventory = AsyncMock(return_value=[WeaponCandidate("A1", "common", 12)])
-        self.cog._request_response = AsyncMock()
+        self.cog._request_response = AsyncMock(return_value=(None, "Player, Dog is now wielding Sword!"))
         await self.cog.check_once()
         self.cog._fetch_inventory.assert_awaited_once()
         self.cog._request_response.assert_awaited_once_with("equip", "weapon", "A1 1")
-        self.assertEqual(calls, 3)
+        self.assertEqual(calls, 1)
 
     async def test_captcha_during_team_read_prevents_inventory_and_equipment(self):
-        async def fetch_team():
+        async def fetch_team(**kwargs):
             self.bot.ch.should_not_send = True
             self.bot.ch.command_handler_status.captcha = True
             return [TeamSlot(1, True, None)]
@@ -170,24 +170,25 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         await self.cog.check_once()
         self.cog._fetch_inventory.assert_not_awaited()
 
-    async def test_fresh_team_prevents_overwriting_new_equipment(self):
-        self.cog._fetch_team = AsyncMock(side_effect=[
-            [TeamSlot(1, True, None)], [TeamSlot(1, True, "KEEP1")],
-        ])
-        self.cog._fetch_inventory = AsyncMock(return_value=[WeaponCandidate("A1", "common", 12)])
+    async def test_manual_equip_invalidates_cached_team_before_auto_equip(self):
+        self.cog._fetch_team = AsyncMock(return_value=[TeamSlot(1, True, None)])
+        async def fetch_inventory():
+            await self.cog.on_message(message("OwOweapon KEEP1 1", author=42, channel=100))
+            return [WeaponCandidate("A1", "common", 12)]
+        self.cog._fetch_inventory = AsyncMock(side_effect=fetch_inventory)
         self.cog._request_response = AsyncMock()
         await self.cog.check_once()
         self.cog._request_response.assert_not_awaited()
+        self.cog._fetch_team.assert_awaited_once()
 
     async def test_one_equip_must_be_confirmed(self):
-        self.cog._fetch_team = AsyncMock(side_effect=[
-            [TeamSlot(1, True, None)], [TeamSlot(1, True, None)], [TeamSlot(1, True, "A1")],
-        ])
+        self.cog._fetch_team = AsyncMock(return_value=[TeamSlot(1, True, None)])
         self.cog._fetch_inventory = AsyncMock(return_value=[WeaponCandidate("A1", "common", 12)])
-        self.cog._request_response = AsyncMock(return_value=(None, "equipped"))
+        self.cog._request_response = AsyncMock(return_value=(None, "Player, Dog is now wielding Sword!"))
         await self.cog.check_once()
         self.cog._request_response.assert_awaited_once_with("equip", "weapon", "A1 1")
-        self.assertEqual(self.cog._fetch_team.await_count, 3)
+        self.assertEqual(self.cog._team_slots, [TeamSlot(1, True, "A1")])
+        self.cog._fetch_team.assert_awaited_once()
 
     async def test_unknown_team_never_equips(self):
         self.cog._request_response = AsyncMock(return_value=(None, "Unknown team display"))
@@ -208,15 +209,16 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_assigned_weapon_id_is_not_reused(self):
         empty = [TeamSlot(1, True, None), TeamSlot(2, True, None)]
-        half = [TeamSlot(1, True, "A1"), TeamSlot(2, True, None)]
-        full = [TeamSlot(1, True, "A1"), TeamSlot(2, True, "B1")]
-        self.cog._fetch_team = AsyncMock(side_effect=[empty, empty, half, half, full])
+        self.cog._fetch_team = AsyncMock(return_value=empty)
         self.cog._fetch_inventory = AsyncMock(return_value=[
             WeaponCandidate("A1", "common", 12), WeaponCandidate("B1", "uncommon", 22),
         ])
-        self.cog._request_response = AsyncMock()
+        self.cog._request_response = AsyncMock(side_effect=[
+            (None, "Player, Dog is now wielding Sword!"), (None, "Player, Cat is now wielding Bow!"),
+        ])
         await self.cog.check_once()
         self.assertEqual([call.args[2] for call in self.cog._request_response.await_args_list], ["A1 1", "B1 2"])
+        self.cog._fetch_team.assert_awaited_once()
 
     async def test_empty_inventory_is_not_checked_again_before_one_hour(self):
         self.cog._fetch_team = AsyncMock(return_value=[TeamSlot(1, True, None)])
@@ -229,6 +231,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         with patch("core.cogs.weapons.time.monotonic", return_value=3701):
             await self.cog.check_once()
         self.assertEqual(self.cog._fetch_inventory.await_count, 2)
+        self.cog._fetch_team.assert_awaited_once()
 
     async def test_queries_disable_command_retries_and_require_own_send(self):
         task = asyncio.create_task(self.cog._request_response("inventory", "weapon"))

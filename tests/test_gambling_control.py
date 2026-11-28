@@ -89,6 +89,47 @@ class GamblingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(control.bet_amount("blackjack", 2), 400)
             self.assertEqual(control.bet_amount("coinflip", 0), 50)
 
+    async def test_queued_bet_rechecks_the_current_balance(self):
+        config = {**bot_control.DEFAULTS, "slotsBet": 400}
+        gamble = NS(**{game: NS(enabled=True) for game in control.GAMES})
+        bot = NS(settings_dict=NS(prefix="o", gamble=gamble), alias={}, get_cog=lambda _: None,
+                 stats=NS(balance=399, has_updated_balance=True, gain_or_lose=0))
+        with patch.object(bot_control, "get_settings", return_value=config):
+            self.assertIsNone(control.refresh_message_bet(bot, "oslots 400"))
+            bot.stats.balance = 400
+            self.assertEqual(control.refresh_message_bet(bot, "oslots 400"), "oslots 400")
+
+    async def test_lowering_a_capped_bet_requeues_once_after_setting_refresh(self):
+        class Cog(control.GamblingLifecycle):
+            start_slots = AsyncMock()
+
+        config = {**bot_control.DEFAULTS, "slotsEnabled": True, "slotsBet": 100}
+        gamble = NS(**{game: NS(enabled=game == "slots", startValue=200, multiplier=2) for game in control.GAMES})
+        cog = Cog()
+        cog.turns_lost = 11
+        cog.exceeded_max_amount = True
+        bot = NS(settings_dict=NS(prefix="o", gamble=gamble), alias={},
+                 stats=NS(gain_or_lose=0), extensions={"core.cogs.slots": object()},
+                 get_cog=lambda name: cog if name == "Slots" else None)
+        with patch.object(bot_control, "get_settings", return_value=config):
+            control.apply_flags(bot)  # Another game can apply settings before the monitor runs.
+            await control.sync(bot)
+            await control.sync(bot)
+            await cog._gambling_task
+        self.assertEqual(cog.turns_lost, 0)
+        self.assertFalse(cog.exceeded_max_amount)
+        cog.start_slots.assert_awaited_once_with(startup=True)
+
+    async def test_bonus_only_affects_coinflip_and_only_when_doubling_is_on(self):
+        config = {**bot_control.DEFAULTS, "coinflipBet": 1000, "coinflipDoubleOnLoss": True, "coinflipBonusOnLoss": True}
+        with patch.object(bot_control, "get_settings", return_value=config):
+            self.assertEqual([control.bet_amount("coinflip", n) for n in range(7)],
+                             [1000, 2000, 4200, 9240, 21252, 51004, 127510])
+            self.assertEqual(control.bet_amount("slots", 4), 3200)
+            self.assertEqual(control.bet_amount("blackjack", 4), 3200)
+            config["coinflipDoubleOnLoss"] = False
+            self.assertEqual(control.bet_amount("coinflip", 6), 1000)
+
     async def test_changed_bet_resets_streak_and_refreshes_dequeued_command(self):
         config = {**bot_control.DEFAULTS,"coinflipEnabled":True,"coinflipBet":50,"coinflipDoubleOnLoss":False}
         cog = NS(turns_lost=4, exceeded_max_amount=True)
@@ -109,10 +150,16 @@ class GamblingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(control.refresh_message_bet(bot,"owo cf 50 heads"),"owo cf 200 tails")
             self.assertEqual(cog.turns_lost,2)
             self.assertEqual(control.refresh_message_bet(bot,"owo slots 50"),"owo slots 200")
+            config["coinflipBonusOnLoss"] = True
+            self.assertEqual(control.refresh_message_bet(bot, "owo cf 200 heads"), "owo cf 50 tails")
+            self.assertEqual(cog.turns_lost, 0)
+            cog.turns_lost = 4
+            self.assertEqual(control.refresh_message_bet(bot, "owo cf 800 heads"), "owo cf 1062 tails")
 
     async def test_each_switch_loads_and_unloads_only_its_game(self):
         config = {**bot_control.DEFAULTS, "coinflipEnabled": True}
-        bot = NS(settings_dict=NS(gamble=NS(**{g:NS(enabled=False) for g in control.GAMES})), extensions={})
+        bot = NS(settings_dict=NS(gamble=NS(**{g:NS(enabled=False) for g in control.GAMES})),
+                 extensions={}, get_cog=lambda _: None)
         async def load(name): bot.extensions[name] = object()
         async def unload(name): bot.extensions.pop(name)
         bot.load_extension = AsyncMock(side_effect=load)
@@ -152,6 +199,10 @@ class GamblingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class GamblingWebTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.object(bot_control, "_settings", dict(bot_control.DEFAULTS)))
+        self.enterContext(patch.object(bot_control, "_account_settings", {}))
+
     def test_coinflip_history_window_validation_and_save(self):
         for size in (100,500):
             self.assertEqual(bot_control.validate_settings({"coinflipHistoryWindow":size}),{"coinflipHistoryWindow":size})
@@ -230,7 +281,7 @@ class GamblingWebTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(bot_control,"SETTINGS_PATH",Path(directory)/"dashboard.json"):
             data = {"coinflipEnabled":True,"slotsEnabled":False,"blackjackEnabled":True,
                     "coinflipBet":50,"slotsBet":100,"blackjackBet":75,
-                    "coinflipDoubleOnLoss":False,"slotsDoubleOnLoss":True,"blackjackDoubleOnLoss":False,
+                    "coinflipDoubleOnLoss":False,"coinflipBonusOnLoss":True,"slotsDoubleOnLoss":True,"blackjackDoubleOnLoss":False,
                     "gambleGoalEnabled":True,"gambleGoalAmount":50000,
                     "gambleLossEnabled":True,"gambleLossAmount":5000}
             self.assertEqual(client.patch("/api/settings",json=data, environ_overrides={"REMOTE_ADDR":"192.0.2.1"}).status_code,403)
@@ -238,6 +289,7 @@ class GamblingWebTests(unittest.TestCase):
             self.assertEqual(response.status_code,200)
             for key,value in data.items(): self.assertEqual(response.json["settings"][key],value)
             self.assertEqual(client.patch("/api/settings",json={"coinflipEnabled":1},headers={"password":"test"}).status_code,400)
+            self.assertEqual(client.patch("/api/settings",json={"coinflipBonusOnLoss":"true"}).status_code,400)
             self.assertIn('"blackjackEnabled": true', bot_control.SETTINGS_PATH.read_text())
         html = client.get("/").data
         for game in control.GAMES:

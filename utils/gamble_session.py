@@ -71,33 +71,36 @@ def save_state(account, state, path=DB_PATH):
 
 
 async def reset_session(bot):
-    from utils.gambling_control import COG_NAMES
+    from utils.gambling_control import COG_NAMES, restart_game
     if not hasattr(bot, "_gamble_state_lock"):
         bot._gamble_state_lock = asyncio.Lock()
     async with bot._gamble_state_lock:
         bot.stats.gain_or_lose = 0
         bot._gamble_loss_latch = None
         bot.gamble_streaks.reset_current()
-        if getattr(bot, "_persist_gamble_streaks", False):
-            await asyncio.to_thread(save_state, bot.user.id, bot.gamble_streaks.snapshot())
         for game, name in COG_NAMES.items():
             cog = bot.get_cog(name)
             if not cog:
                 continue
-            was_exceeded = cog.exceeded_max_amount
+            was_exceeded = cog.exceeded_max_amount or getattr(cog, "_restart_after_cap", False)
             cog.turns_lost = 0
             cog.exceeded_max_amount = False
             for key in cog.gamble_flags:
                 cog.gamble_flags[key] = False
             if was_exceeded and cog.gambling_enabled():
-                starter = getattr(cog, {"coinflip":"start_cf", "slots":"start_slots", "blackjack":"send_blackjack"}[game])
-                cog.start_gambling(starter(startup=True))
+                restart_game(cog, game)
         # Do not clear cooldowns, completed round IDs, account balance or farm state.
         bot.response_guard.gamble_profit = 0
         bot.response_guard.gamble_loss_stopped = False
-        bot.response_guard.gamble_streaks = bot.gamble_streaks.snapshot()
+        streaks = bot.gamble_streaks.snapshot()
+        bot.response_guard.gamble_streaks = streaks
         bot.response_guard.tick()
-        return {"profit": 0, "streaks": bot.gamble_streaks.snapshot()}
+        if getattr(bot, "_persist_gamble_streaks", False):
+            try:
+                await asyncio.to_thread(save_state, bot.user.id, streaks)
+            except (OSError, sqlite3.Error):
+                await bot.log("Đã đặt lại phiên cược trong bộ nhớ nhưng chưa lưu được chuỗi thua vào ổ đĩa.")
+        return {"profit": 0, "streaks": streaks}
 
 
 def register(account, loop, handler):

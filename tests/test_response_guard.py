@@ -101,6 +101,18 @@ class GuardTests(unittest.TestCase):
         self.clock.advance(120)
         self.assertTrue(self.guard.ready)
 
+    def test_disabling_rest_keeps_manual_operations_serialized(self):
+        self.guard.expect(99, min_id=100, manual=True)
+        self.config["restEnabled"] = False
+        self.assertFalse(self.guard.ready)
+        self.assertTrue(self.guard.observe(message(), 42, {"Player"}, 408))
+
+        self.guard.expect(99, min_id=100, manual=True)
+        self.assertFalse(self.guard.ready)
+        self.clock.advance(20)
+        self.assertTrue(self.guard.ready)
+        self.assertEqual(self.guard.misses, 0)
+
     def test_manual_pause_is_not_a_missing_response(self):
         self.guard.expect(99, min_id=100)
         bot_control.set_running(False)
@@ -186,9 +198,9 @@ class SettingsApiTests(unittest.TestCase):
 
     def test_channel_is_checked_before_it_is_saved(self):
         with patch("utils.bot_control.validate_channel") as validate:
-            response = self.client.patch("/api/settings", headers=self.headers, json={"channelId":"1572118634254569502"})
+            response = self.client.patch("/api/settings", headers=self.headers, json={"channelId":"123456789012345678"})
             self.assertEqual(response.status_code, 200)
-            validate.assert_called_once_with("1572118634254569502")
+            validate.assert_called_once_with("123456789012345678")
         previous = bot_control.get_settings()
         with patch("utils.bot_control.validate_channel", side_effect=ValueError("Không có quyền gửi tin")):
             response = self.client.patch("/api/settings", headers=self.headers, json={"channelId":"1572118634254569503"})
@@ -196,7 +208,7 @@ class SettingsApiTests(unittest.TestCase):
             self.assertEqual(bot_control.get_settings(), previous)
 
     def test_channel_rejects_malformed_ids(self):
-        for value in [1572118634254569502, "abc", "123", "1"*21, "１２３４５６７８９０１２３４５６７８"]:
+        for value in [123456789012345678, "abc", "123", "1"*21, "１２３４５６７８９０１２３４５６７８"]:
             self.assertEqual(self.client.patch("/api/settings", headers=self.headers, json={"channelId":value}).status_code, 400)
 
     def test_gem_order_can_be_saved_and_invalid_values_are_rejected(self):
@@ -209,7 +221,66 @@ class SettingsApiTests(unittest.TestCase):
             self.assertEqual(self.client.patch("/api/settings",headers=self.headers,json={"gemOrder":order}).status_code,400)
 
 
+class SchedulerRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_after_rest_requeues_enabled_hunt_when_its_check_was_lost(self):
+        from core.cogs.commands import Commands
+        from core.command_handler import CommandHandler
+
+        config = {**bot_control.DEFAULTS, "failureThreshold": 4, "restMinutes": 5, "battleEnabled": False}
+        now = [1000]
+        guard = ResponseGuard("scheduler-recovery", lambda: now[0], lambda: config)
+        hunt = NS(cmd={"id": "hunt", "cmd_name": "h", "checks": True})
+        battle = NS(cmd={"id": "battle", "cmd_name": "b", "checks": True})
+        bot = NS(response_guard=guard, misc={"command_info": {"hunt": {}, "battle": {}}},
+                 get_cog={"Hunt": hunt, "Battle": battle}.get,
+                 stats=NS(gain_or_lose=0), gamble_streaks=NS(snapshot=lambda: {}), hunt_disabled=False,
+                 settings_dict=NS(cooldowns=NS(commandHandler=NS(readdingToQueue=7))),
+                 apply_dashboard_resume=AsyncMock(return_value=False), apply_dashboard_settings=AsyncMock(),
+                 log=AsyncMock())
+        bot.ch = CommandHandler(bot)
+        bot.ch.cmd_priorities = {"hunt": 1, "battle": 2}
+        manager = Commands(bot)
+        bot_control.set_running(True)
+        with patch.object(bot_control, "get_settings", return_value=config):
+            for _ in range(4):
+                guard.expect(99)
+                now[0] += config["responseTimeout"]
+                await manager.monitor_checks.coro(manager)
+            self.assertTrue(guard.cooling_down)
+            self.assertTrue(bot.ch.queue.empty())
+            now[0] += 299
+            await manager.monitor_checks.coro(manager)
+            self.assertTrue(bot.ch.queue.empty())
+            now[0] += 1
+            # Recovery waits for independently blocked sends even after the timer expires.
+            bot.ch.command_handler_status.sleep = True
+            await manager.monitor_checks.coro(manager)
+            self.assertTrue(bot.ch.queue.empty())
+            bot.ch.command_handler_status.sleep = False
+            await manager.monitor_checks.coro(manager)
+            await manager.monitor_checks.coro(manager)
+            self.assertEqual(bot.ch.queue.qsize(), 1)
+            self.assertEqual(bot.ch.queue.get_nowait()[2]["id"], "hunt")
+            self.assertEqual(bot.ch.checks, [])
+
+
 class SenderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_hunt_aliases_share_cooldown_without_delaying_battle(self):
+        now = [1000]
+        fake = NS(_outgoing_lock=asyncio.Lock(), response_guard=NS(ready=True), alias={},
+                  settings_dict=NS(prefix="o", commands=NS(hunt=NS(cooldown=[15, 17]), battle=NS(cooldown=[15, 17]))),
+                  _wait_for_send_slot=AsyncMock(return_value=True), _send_unlocked=AsyncMock(return_value=NS(id=200)))
+        with patch("utils.farm_control.monotonic", side_effect=lambda: now[0]):
+            self.assertTrue(await self.Client.send(fake, "oh"))
+            now[0] += 5
+            self.assertFalse(await self.Client.send(fake, "ohunt"))
+            self.assertTrue(await self.Client.send(fake, "ob"))
+            now[0] += 2
+            self.assertFalse(await self.Client.send(fake, "oh"))
+            now[0] += 8
+            self.assertTrue(await self.Client.send(fake, "oh"))
+        self.assertEqual([call.args[0] for call in fake._send_unlocked.await_args_list], ["oh", "ob", "oh"])
+
     async def test_hunt_and_battle_disabled_during_wait_are_not_sent(self):
         from utils.gamble_pacing import GamblePacing
         for command,key in (("oh","huntEnabled"),("ob","battleEnabled")):
@@ -290,6 +361,22 @@ class SenderTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(await self.Client.send(fake, "owo"))
         fake._send_unlocked.assert_not_awaited()
 
+    async def test_automation_rechecks_permission_just_before_sending(self):
+        channel = NS(id=99, send=AsyncMock())
+        guard = ResponseGuard("queued-automation-test", channel_id=99)
+        fake = NS(
+            _outgoing_lock=asyncio.Lock(), response_guard=guard, cm=channel,
+            ch=NS(command_handler_status=NS(captcha=False)), misc={"console": {"disableCommandSendLog": True}},
+            settings_dict=NS(prefix="o", misspell=NS(enabled=True)), alias={},
+            wait_until_ready=AsyncMock(), _wait_for_send_slot=AsyncMock(return_value=True),
+        )
+        fake._send_unlocked = lambda *args, **kwargs: self.Client._send_unlocked(fake, *args, **kwargs)
+        check = iter((True, False))
+        sent = await self.Client.send(fake, "ohuntbot 500", expect_response=True, automation_check=lambda: next(check))
+        self.assertFalse(sent)
+        self.assertIsNone(guard.pending)
+        channel.send.assert_not_awaited()
+
     async def test_manual_send_works_while_farm_is_stopped_without_starting_it(self):
         bot_control.set_running(False)
         channel=NS(id=99,send=AsyncMock(return_value=NS(id=200)))
@@ -323,15 +410,15 @@ class SenderTests(unittest.IsolatedAsyncioTestCase):
         guard.misses = 2
         fake = NS(settings_dict=NS(prefix="o",gamble=NS(**{g:NS(enabled=False) for g in ("coinflip","slots","blackjack")})), extensions={}, cm=NS(id=99), _initial_channel_id=99,
             _outgoing_lock=asyncio.Lock(), response_guard=guard, get_cog=lambda _: None,
-            _dashboard_channels={"1572118634254569502":NS(id=1572118634254569502, slowmode_delay=7)})
-        config = {**bot_control.DEFAULTS, "prefix":"owo ", "channelId":"1572118634254569502"}
+            _dashboard_channels={"123456789012345678":NS(id=123456789012345678, slowmode_delay=7)})
+        config = {**bot_control.DEFAULTS, "prefix":"owo ", "channelId":"123456789012345678"}
         with patch("utils.bot_control.get_settings", return_value=config):
             await self.Client.apply_dashboard_settings(fake)
         self.assertEqual(fake.settings_dict.prefix, "owo ")
-        self.assertEqual(fake.cm.id, 1572118634254569502)
+        self.assertEqual(fake.cm.id, 123456789012345678)
         self.assertEqual(fake.cm_slowmode_cd, 7)
         self.assertEqual(guard.misses, 0)
-        self.assertEqual(guard.channel_id, "1572118634254569502")
+        self.assertEqual(guard.channel_id, "123456789012345678")
 
     async def test_explicit_start_clears_old_captcha_and_response_waits(self):
         guard=ResponseGuard("resume-test")
@@ -353,6 +440,19 @@ class SenderTests(unittest.IsolatedAsyncioTestCase):
         await self.Client.apply_dashboard_resume(fake)
         self.assertTrue(status.captcha)
         self.assertEqual(captcha.reset_waiting.await_count,1)
+
+    async def test_explicit_start_preserves_an_inflight_manual_request(self):
+        guard = ResponseGuard("manual-resume-test", settings=lambda: {**bot_control.DEFAULTS, "restEnabled": True})
+        status = NS(captcha=False)
+        fake = NS(response_guard=guard, ch=NS(command_handler_status=status), get_cog=lambda _: None, log=AsyncMock())
+        bot_control.set_running(False)
+        guard.expect(99, min_id=100, manual=True)
+        pending = guard.pending
+        bot_control.set_running(True)
+        self.assertTrue(await self.Client.apply_dashboard_resume(fake))
+        self.assertIsNotNone(pending)
+        self.assertIs(guard.pending, pending)
+        self.assertFalse(guard.ready)
 
     async def test_manual_resume_cancels_previous_captcha_timer(self):
         import ast

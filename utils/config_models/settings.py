@@ -21,9 +21,19 @@ from utils.config_models import validators
 from utils.config_models.helpers import expected_fetch
 
 
+_command_random = random.Random()
+
+
 def get_cd(cd: list):
     validators.validate_cooldown(cd)
     return random.uniform(cd[0], cd[1])
+
+
+def get_command_cd(cd: list):
+    """Vary repeat intervals while keeping the configured minimum cooldown."""
+    validators.validate_cooldown(cd)
+    upper = max(cd[1], cd[0] + min(10, cd[0]))
+    return _command_random.uniform(cd[0], upper)
 
 
 class Settings:
@@ -160,6 +170,9 @@ class CustomCommand:
         if self.cooldown <= 0:
             raise ValueError("Don't use 0 as cooldown.")
 
+    def get_cd(self):
+        return get_command_cd([self.cooldown, self.cooldown + min(10, self.cooldown)])
+
 
 class AutoWeapons:
     def __init__(self, d: dict):
@@ -236,7 +249,7 @@ class ReactionBot:
         self.cooldown = expected_fetch(d, "cooldown", list, float)
 
     def get_cd(self):
-        return get_cd(self.cooldown)
+        return get_command_cd(self.cooldown)
 
 
 class Misspell:
@@ -349,7 +362,7 @@ class GambleItem:
             self.options = CoinflipOptions(cf_options)
 
     def get_cd(self):
-        return get_cd(self.cooldown)
+        return get_command_cd(self.cooldown)
 
 
 class CoinflipOptions:
@@ -420,7 +433,7 @@ class Command:
         self.prioritise = d.get("prioritise", False)
 
     def get_cd(self):
-        return get_cd(self.cooldown)
+        return get_command_cd(self.cooldown)
 
 
 class Lottery:
@@ -437,7 +450,7 @@ class Animal:
         self.cooldown = expected_fetch(d, "cooldown", list, float)
 
     def get_cd(self):
-        return get_cd(self.cooldown)
+        return get_command_cd(self.cooldown)
 
 
 class EmergencySell:
@@ -509,7 +522,7 @@ class ShopCommand:
         self.items = ShopItems(expected_fetch(d, "itemsToBuy", dict))
 
     def get_cd(self):
-        return get_cd(self.cooldown)
+        return get_command_cd(self.cooldown)
 
     def get_price_and_id(self, ring):
         for idx, (name, price) in enumerate(RING_PRICES, start=1):

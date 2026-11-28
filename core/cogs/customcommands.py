@@ -51,10 +51,14 @@ class CustomCommands(BaseCog):
 
         await self.bot.ch.put_queue(cmd)
 
+        next_cooldown = cmd_data.get_cd()
         if tracker_idx is not None:
             self.cmd_tracker[tracker_idx]["last_ran"] = time.monotonic()
+            self.cmd_tracker[tracker_idx]["cooldown"] = next_cooldown
         else:
-            self.cmd_tracker.append({"base": cmd_data, "last_ran": time.monotonic()})
+            self.cmd_tracker.append({
+                "base": cmd_data, "last_ran": time.monotonic(), "cooldown": next_cooldown,
+            })
 
     @property
     def settings(self):
@@ -73,7 +77,7 @@ class CustomCommands(BaseCog):
                 await self.run_cmd(cmd)
             else:
                 cd_info_dict = self.fetch_last_ran_diff(
-                    results[0]["data"]["last_ran"], cmd.cooldown
+                    results[0]["data"]["last_ran"], results[0]["data"]["cooldown"]
                 )
                 if cd_info_dict["required"]:
                     await self.run_cmd(cmd, results[0]["index"])

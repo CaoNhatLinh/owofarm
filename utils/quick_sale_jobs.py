@@ -48,7 +48,10 @@ def accounts():
 
 def jobs():
     with _lock:
-        return [dict(job) for job in _jobs.values()]
+        history = list(_jobs.values())
+        return [dict(job) for job in history[:-50] if job["state"] not in TERMINAL] + [
+            dict(job) for job in history[-50:]
+        ]
 
 
 def update(job_id, **values):
@@ -84,11 +87,6 @@ def submit(data):
         job = dict(id=request_id, accountId=account_id, accountName=label, kind=kind,
             maxRarity=maximum, state="queued", sold=0, message="Đã nhận yêu cầu; đang chờ bot xử lý.", updatedAt=time.time())
         _jobs[request_id] = job
-        for key in list(_jobs):
-            if len(_jobs) <= 50:
-                break
-            if _jobs[key]["state"] in TERMINAL:
-                del _jobs[key]
     coroutine = handler(dict(job))
     try:
         asyncio.run_coroutine_threadsafe(coroutine, loop)

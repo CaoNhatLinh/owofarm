@@ -18,6 +18,7 @@ import sqlite3
 import threading
 import traceback
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 # Third-Party Libraries
 import aiohttp
@@ -108,11 +109,16 @@ class MyClient(commands.Bot):
         self._initial_channel_id = self.channel_id
         self._dashboard_channels = {}
         self._channel_retry_after = 0
-        self.response_guard = ResponseGuard(str(self.channel_id))
+        self._dashboard_initialized = False
+        self.response_guard = ResponseGuard(uuid4().hex, settings=lambda: bot_control.settings_for(self),
+                                           channel_id=self.channel_id)
         self.gamble_pacing = GamblePacing(startup_delay=10)
         self._outgoing_lock = asyncio.Lock()
         self.add_listener(self._observe_response, "on_message")
         self.add_listener(self._observe_response_edit, "on_message_edit")
+        self.add_listener(self._dashboard_ready, "on_ready")
+        self.add_listener(self._dashboard_ready, "on_resumed")
+        self.add_listener(self._dashboard_disconnect, "on_disconnect")
         self.list_channel = [self.channel_id]
         self.session = None
         self.message_dispatcher = MessageDispatcher()
@@ -211,6 +217,14 @@ class MyClient(commands.Bot):
     async def _observe_response_edit(self, before, after):
         await self._observe_response(after)
 
+    async def _dashboard_ready(self):
+        self.response_guard.connected = self._dashboard_initialized
+        self.response_guard.tick()
+
+    async def _dashboard_disconnect(self):
+        self.response_guard.connected = False
+        self.response_guard.tick()
+
     async def _validate_dashboard_channel(self, channel_id):
         try:
             channel = await self.fetch_channel(int(channel_id))
@@ -234,7 +248,13 @@ class MyClient(commands.Bot):
         await gem_control.sync(self)
         await gambling_control.sync(self)
         import time as monotime
-        settings = bot_control.get_settings()
+        settings = bot_control.settings_for(self)
+        if settings.get("teamSetupEnabled") and "core.cogs.weapons" not in self.extensions:
+            await self.load_extension("core.cogs.weapons")
+        weapons = self.get_cog("Weapons")
+        if weapons:
+            weapons.refresh_setup()
+        self.response_guard.team_setup_status = getattr(self, "_team_setup_status", None)
         self.response_guard.prefix = self.settings_dict.prefix
         target = settings["channelId"] or str(self._initial_channel_id)
         prefix_changed = self.settings_dict.prefix != settings["prefix"]
@@ -268,7 +288,6 @@ class MyClient(commands.Bot):
             self.response_guard.channel_id = str(self.cm.id)
             self.response_guard.channel_error = ""
             self.response_guard.tick()
-            weapons = self.get_cog("Weapons")
             if weapons:
                 pending = weapons._pending
                 if pending is not None and not pending.future.done():
@@ -276,21 +295,24 @@ class MyClient(commands.Bot):
                 await weapons._discard_queued()
 
     async def apply_dashboard_resume(self):
-        generation = bot_control.get_resume_generation()
-        if self.response_guard.resume_generation == generation:
+        generation = bot_control.get_resume_generation(getattr(self, "_dashboard_account_id", None))
+        if self.response_guard.resume_generation == generation or not bot_control.running_for(self):
             return
         captcha = self.get_cog("Captcha")
         if captcha:
             await captcha.reset_waiting()
         else:
             self.ch.command_handler_status.captcha = False
-        self.response_guard.cancel()
+        pending = self.response_guard.pending
+        if not pending or not pending.get("manual"):
+            self.response_guard.cancel()
         self.response_guard.misses = 0
         self.response_guard.rest_until = 0
         self.response_guard.captcha = False
         self.response_guard.resume_generation = generation
         self.response_guard.tick()
         await self.log("Tiếp tục theo yêu cầu trên web: đã xoá trạng thái chờ CAPTCHA/phản hồi cũ.", "#bcf36b")
+        return True
 
     async def run_dashboard_sale(self, job):
         from core.quick_sales import run_sale
@@ -423,6 +445,15 @@ class MyClient(commands.Bot):
                 self.settings_dict = config_models.configs.FetchSettings(
                     json.load(config_file)
                 )
+            dashboard = bot_control.settings_for(self)
+            self.settings_dict.prefix = dashboard["prefix"]
+            self.response_guard.prefix = self.settings_dict.prefix
+            cookie_recipient = dashboard["cookieRecipientId"]
+            if cookie_recipient:
+                cookie = self.settings_dict.commands.cookie
+                cookie.enabled = cookie_recipient != str(self.user.id)
+                cookie.user_id = cookie_recipient
+                cookie.ping_user = True
 
             from utils.gambling_control import apply_flags
             apply_flags(self)
@@ -485,15 +516,16 @@ class MyClient(commands.Bot):
             "gems": self.settings_dict.autoUse.gems.enabled,
             "giveaway": self.settings_dict.giveaway.enabled,
             "hunt": commands_obj.hunt.enabled and not reaction_bot_obj.huntAndBattle,
-            "huntbot": commands_obj.huntbot.enabled,
+            "huntbot": True,
             "looper": should_start_looper,
             "lottery": commands_obj.lottery.enabled,
             "mail": self.settings_dict.mail,
             "others": True,
-            "weapons": self.settings_dict.autoWeapons.enabled,
+            "weapons": self.settings_dict.autoWeapons.enabled or bot_control.settings_for(self)["teamSetupEnabled"],
             "pupiku": commands_obj.pup.enabled
             or commands_obj.piku.enabled
             or commands_obj.run.enabled,
+            "prayer": True,
             "quest": self.settings_dict.autoQuest.enabled,
             "reactionbot": reactionbot,
             "sell": True,
@@ -654,18 +686,33 @@ class MyClient(commands.Bot):
         return total_time
 
     # send commands
-    async def _wait_for_send_slot(self, bypass=False, manual=False, game=None):
+    async def _wait_for_send_slot(self, bypass=False, manual=False, game=None, *, message=None, channel=None,
+                                  automation_check=None):
         import time as monotime
+        from utils.command_timing import command_timing
+        command_key, command_minimum = command_timing(self, message) if message is not None else (None, 0)
         while True:
-            if ((not bot_control.is_running() and not manual) or self.response_guard.cooling_down
+            if ((not bot_control.running_for(self) and not manual) or self.response_guard.cooling_down
+                    or getattr(self.ch.command_handler_status, "sleep", False)
                     or (manual and (self.ch.command_handler_status.captcha or self.ch.command_handler_status.sleep))
                     or (self.ch.command_handler_status.captcha and not bypass)):
                 return False
-            interval = max(bot_control.get_settings()["messageInterval"], getattr(self, "cm_slowmode_cd", 0))
+            if automation_check is not None and not automation_check():
+                return False
+            active_channel = channel or getattr(self, "cm", None)
+            slowmode = getattr(active_channel, "slowmode_delay", getattr(self, "cm_slowmode_cd", 0) if channel is None else 0)
+            interval = max(bot_control.settings_for(self)["messageInterval"], slowmode)
             remaining = interval - (monotime.monotonic() - self.response_guard.last_sent)
+            pacing = getattr(self.response_guard, "send_pacing", None)
+            if pacing is not None:
+                if message is not None:
+                    updated_key, updated_minimum = command_timing(self, message)
+                    if updated_key == command_key:
+                        command_minimum = max(command_minimum, updated_minimum)
+                remaining = max(remaining, pacing.remaining(interval, command_key, command_minimum))
             if game:
                 from utils.gambling_control import enabled
-                if not enabled(game):
+                if not enabled(game, self):
                     return False
                 remaining = max(remaining, self.gamble_pacing.remaining(game))
             if remaining <= 0:
@@ -674,26 +721,44 @@ class MyClient(commands.Bot):
 
     async def send(self, message, color=None, bypass=False, channel=None,
                    silent=global_settings_dict.silentMessage,
-                   typingIndicator=global_settings_dict.typingIndicator, expect_response=False, manual=False):
+                   typingIndicator=global_settings_dict.typingIndicator, expect_response=False, manual=False,
+                   automation_check=None):
         async with self._outgoing_lock:
+            from utils.command_timing import command_timing
             from utils.gambling_control import command_allowed, command_game, refresh_message_bet
+            from utils import farm_control
             game = command_game(message, self.settings_dict.prefix, self.alias) if hasattr(self, "alias") else None
-            generation = self.gamble_pacing.version(game) if game else None
-            if message.strip().casefold() in {"owo", "uwu"} and not bot_control.get_settings()["owoEnabled"]:
+            farm = farm_control.command_kind(message, self.settings_dict.prefix, self.alias) if hasattr(self, "alias") else None
+            if farm_control.cooldown_remaining(self, farm):
                 return False
-            if not self.response_guard.ready or not await self._wait_for_send_slot(bypass, manual=manual, game=game):
+            generation = self.gamble_pacing.version(game) if game else None
+            if message.strip().casefold() in {"owo", "uwu"} and not bot_control.settings_for(self)["owoEnabled"]:
+                return False
+            if not self.response_guard.ready or not await self._wait_for_send_slot(
+                bypass, manual=manual, game=game, message=message, channel=channel, automation_check=automation_check,
+            ):
+                return False
+            if not self.response_guard.ready:
                 return False
             if game and self.gamble_pacing.version(game) != generation:
                 return False  # An old retry was waiting while its round completed.
-            if not command_allowed(message, self.settings_dict.prefix, self.alias):
+            if automation_check is not None and not automation_check():
+                return False
+            if not command_allowed(message, self.settings_dict.prefix, self.alias, self):
                 return False
             message = refresh_message_bet(self, message)
             if message is None:
                 return False
             if expect_response:
-                self.response_guard.expect((channel or self.cm).id, manual=manual)
+                command_key, _ = command_timing(self, message)
+                self.response_guard.expect((channel or self.cm).id, manual=manual, command=command_key)
             try:
-                sent = await self._send_unlocked(message, color, bypass, channel, silent, typingIndicator, manual=manual)
+                options = {"manual": manual}
+                if automation_check is not None:
+                    options["automation_check"] = automation_check
+                sent = await self._send_unlocked(message, color, bypass, channel, silent, typingIndicator, **options)
+                if sent is not None:
+                    farm_control.mark_sent(self, farm)
                 if sent is not None and game:
                     self.gamble_pacing.sent(game)
                     if game == "coinflip":
@@ -714,12 +779,14 @@ class MyClient(commands.Bot):
         silent=global_settings_dict.silentMessage,
         typingIndicator=global_settings_dict.typingIndicator,
         manual=False,
+        automation_check=None,
     ):
         """
         TASK: Refactor
         """
         from utils import bot_control
-        if not bot_control.is_running() and not manual:
+        from utils.command_timing import command_timing
+        if not bot_control.running_for(self) and not manual:
             return
 
         if not channel:
@@ -729,7 +796,7 @@ class MyClient(commands.Bot):
         misspelled = False
         from utils.gambling_control import command_game
         gamble = command_game(message, self.settings_dict.prefix, self.alias)
-        if self.settings_dict.misspell.enabled and not manual and gamble is None:
+        if self.settings_dict.misspell.enabled and not manual and gamble is None and automation_check is None:
             misspelled = self.settings_dict.misspell.should_misspell()
             msg = misspell_word(message)
             # left off here!
@@ -737,24 +804,30 @@ class MyClient(commands.Bot):
         """
         TASK: remove repetition here
         """
+        command_key, command_minimum = command_timing(self, msg)
         await self.wait_until_ready()
-        if (bot_control.is_running() or manual) and (not self.ch.command_handler_status.captcha or bypass):
+        if ((bot_control.running_for(self) or manual) and (not self.ch.command_handler_status.captcha or bypass)
+                and not getattr(self.ch.command_handler_status, "sleep", False)):
             if typingIndicator:
                 async with channel.typing():
-                    if not bot_control.is_running() and not manual:
+                    if not bot_control.running_for(self) and not manual:
                         return
                     if self.ch.command_handler_status.captcha and not bypass:
                         return
+                    if automation_check is not None and not automation_check():
+                        return
                     from utils.gambling_control import command_allowed as farm_allowed
-                    if not farm_allowed(msg, self.settings_dict.prefix, self.alias):
+                    if not farm_allowed(msg, self.settings_dict.prefix, self.alias, self):
                         return
                     sent_message = await channel.send(msg, silent=silent)
             else:
+                if automation_check is not None and not automation_check():
+                    return
                 from utils.gambling_control import command_allowed as farm_allowed
-                if not farm_allowed(msg, self.settings_dict.prefix, self.alias):
+                if not farm_allowed(msg, self.settings_dict.prefix, self.alias, self):
                     return
                 sent_message = await channel.send(msg, silent=silent)
-            self.response_guard.sent(sent_message)
+            self.response_guard.sent(sent_message, command=command_key, cooldown=command_minimum, channel_id=channel.id)
 
             frame_info = traceback.extract_stack()[-2]
             filename = os.path.basename(frame_info.filename)
@@ -776,30 +849,32 @@ class MyClient(commands.Bot):
                     filename=filename,
                 )
                 await asyncio.sleep(time)
-                if not await self._wait_for_send_slot(bypass):
+                if not await self._wait_for_send_slot(bypass, message=message, channel=channel):
                     await self.ch.set_stat(True)
                     return sent_message
+                command_key, command_minimum = command_timing(self, message)
                 if typingIndicator:
                     async with channel.typing():
                         from utils.gem_control import command_allowed as gems_allowed
-                        if not gems_allowed(message, self.settings_dict.prefix, self.alias):
+                        if not gems_allowed(message, self.settings_dict.prefix, self.alias, self):
                             await self.ch.set_stat(True)
                             return sent_message
                         await channel.send(message, silent=silent)
                 else:
                     from utils.gem_control import command_allowed as gems_allowed
-                    if not gems_allowed(message, self.settings_dict.prefix, self.alias):
+                    if not gems_allowed(message, self.settings_dict.prefix, self.alias, self):
                         await self.ch.set_stat(True)
                         return sent_message
                     await channel.send(message, silent=silent)
                 await self.ch.set_stat(True)
-                self.response_guard.sent(None)
+                self.response_guard.sent(None, command=command_key, cooldown=command_minimum, channel_id=channel.id)
             return sent_message
 
     @suppress_and_log("Sending Slash Command")
-    async def slashCommandSender(self, msg, color, channel, **kwargs):
+    async def slashCommandSender(self, msg, color, channel, *, automation_check=None, **kwargs):
         from utils import bot_control
-        if not bot_control.is_running():
+        from utils.command_timing import command_timing
+        if not bot_control.running_for(self):
             return
         if not channel:
             channel = self.cm
@@ -810,19 +885,29 @@ class MyClient(commands.Bot):
             if command.name == msg:
                 await self.wait_until_ready()
                 async with self._outgoing_lock:
-                    if not self.response_guard.ready or not await self._wait_for_send_slot():
+                    from utils import farm_control
+                    if farm_control.cooldown_remaining(self, msg):
                         return False
-                    from utils.farm_control import enabled as farm_enabled
-                    if not farm_enabled(msg):
+                    text_command = self.settings_dict.prefix + msg + " " + " ".join(str(value) for value in kwargs.values())
+                    if not self.response_guard.ready or not await self._wait_for_send_slot(
+                        message=text_command, channel=channel, automation_check=automation_check,
+                    ):
+                        return False
+                    if not self.response_guard.ready:
+                        return False
+                    if not farm_control.enabled(msg, self):
                         return False
                     from utils.gem_control import command_allowed as gems_allowed
-                    text_command = self.settings_dict.prefix + msg + " " + " ".join(str(value) for value in kwargs.values())
-                    if not gems_allowed(text_command, self.settings_dict.prefix, self.alias):
+                    if not gems_allowed(text_command, self.settings_dict.prefix, self.alias, self):
                         return False
-                    self.response_guard.expect(channel.id)
+                    if automation_check is not None and not automation_check():
+                        return False
+                    command_key, command_minimum = command_timing(self, text_command)
+                    self.response_guard.expect(channel.id, command=command_key)
                     try:
                         await command(**kwargs)
-                        self.response_guard.sent(None)
+                        farm_control.mark_sent(self, msg)
+                        self.response_guard.sent(None, command=command_key, cooldown=command_minimum, channel_id=channel.id)
                     except BaseException:
                         self.response_guard.cancel()
                         raise
@@ -830,26 +915,11 @@ class MyClient(commands.Bot):
                     return True
 
     def calc_time(self):
-        pst_timezone = pytz.timezone("US/Pacific")  # gets timezone
-        current_time_pst = datetime.now(timezone.utc).astimezone(
-            pst_timezone
-        )  # current pst time
-        midnight_pst = pst_timezone.localize(
-            datetime(
-                current_time_pst.year,
-                current_time_pst.month,
-                current_time_pst.day,
-                0,
-                0,
-                0,
-            )
-        )  # gets 00:00 of the day
-        time_until_12am_pst = (
-            midnight_pst + timedelta(days=1) - current_time_pst
-        )  # adds a day to the midnight to get time till next midnight, then subtract it with current time
-        total_seconds = time_until_12am_pst.total_seconds()  # turn that time to seconds
-        # 12am = 00:00, I might need this the next time I take a look here.
-        return total_seconds
+        pacific = pytz.timezone("US/Pacific")
+        now = datetime.now(timezone.utc).astimezone(pacific)
+        tomorrow = now.date() + timedelta(days=1)
+        midnight = pacific.localize(datetime.combine(tomorrow, datetime.min.time()))
+        return (midnight - now).total_seconds()
 
     # TBR
     def should_run(self, last_timestamp):
@@ -943,10 +1013,12 @@ class MyClient(commands.Bot):
             )
         else:
             self.username = self.user.name
+        self._dashboard_account_id = str(self.user.id)
         self.response_guard.label = self.username
-        bot_control.register_channel_checker(self.response_guard.key, asyncio.get_running_loop(), self._validate_dashboard_channel)
-        from utils import quick_sale_jobs
-        quick_sale_jobs.register(str(self.user.id), self.username, asyncio.get_running_loop(), self.run_dashboard_sale)
+        self.response_guard.account_id = self._dashboard_account_id
+        self.response_guard.resume_generation = bot_control.get_resume_generation(self._dashboard_account_id)
+        self.response_guard.tick()
+        bot_control.register_channel_checker(self._dashboard_account_id, asyncio.get_running_loop(), self._validate_dashboard_channel)
 
         self.safety_check_loop.start()
         self.local_headers = await components.headers.generate_headers()
@@ -966,31 +1038,55 @@ class MyClient(commands.Bot):
 
         await self.db.update_priorities()
 
-        # Fetch the channel
-        self.cm = self.get_channel(self.channel_id)
+        target = self._configured_dashboard_channel()
+        if not await self._connect_dashboard_channel(target):
+            self._channel_startup_task = asyncio.create_task(self._wait_for_dashboard_channel(target))
+            return
+        await self._finish_dashboard_startup()
 
-        if not self.cm:
-            try:
-                self.cm = await self.fetch_channel(self.channel_id)
-            except discord.NotFound:
-                await self.log(
-                    f"Error - Channel with ID {self.channel_id} does not exist.",
-                    "#c25560",
-                )
-                return
-            except discord.Forbidden:
-                await self.log(
-                    f"Bot lacks permissions to access channel {self.channel_id}.",
-                    "#c25560",
-                )
-                return
-            except discord.HTTPException as e:
-                await self.log(
-                    f"Failed to fetch channel {self.channel_id}: {e}", "#c25560"
-                )
-                return
+    def _configured_dashboard_channel(self):
+        return int(bot_control.settings_for(self)["channelId"] or self._initial_channel_id)
 
-        self.cm_slowmode_cd = self.cm.slowmode_delay
+    async def _connect_dashboard_channel(self, target):
+        self.response_guard.channel_id = str(target)
+        try:
+            channel = self.get_channel(target) or await self.fetch_channel(target)
+            if not getattr(channel, "guild", None) or not hasattr(channel, "send"):
+                raise ValueError("Hãy dùng ID kênh chat trong server Discord.")
+        except (discord.NotFound, discord.Forbidden):
+            error = "Không tìm thấy kênh hoặc tài khoản chưa có quyền truy cập."
+        except discord.HTTPException:
+            error = "Discord chưa kết nối được kênh. Bot sẽ thử lại."
+        except ValueError as exc:
+            error = str(exc)
+        else:
+            self.cm = channel
+            self.channel_id = channel.id
+            self.cm_slowmode_cd = getattr(channel, "slowmode_delay", 0)
+            self.response_guard.channel_error = ""
+            self.response_guard.tick()
+            return True
+        if self.response_guard.channel_error != error:
+            await self.log(f"Kênh {target}: {error}", "#c25560")
+        self.response_guard.channel_error = error
+        self.response_guard.tick()
+        return False
+
+    async def _wait_for_dashboard_channel(self, previous_target):
+        await self.wait_until_ready()
+        loop = asyncio.get_running_loop()
+        retry_at = loop.time() + 30
+        while not self.is_closed():
+            target = self._configured_dashboard_channel()
+            if target != previous_target or loop.time() >= retry_at:
+                if await self._connect_dashboard_channel(target):
+                    await self._finish_dashboard_startup()
+                    return
+                previous_target = target
+                retry_at = loop.time() + 30
+            await asyncio.sleep(1)
+
+    async def _finish_dashboard_startup(self):
 
         # self.nick_name = self.cm.guild.me.nick
 
@@ -1019,10 +1115,6 @@ class MyClient(commands.Bot):
         if not hasattr(self, "coinflip_history"):
             from utils.coinflip_history import load
             self.coinflip_history = await asyncio.to_thread(load, self.user.id)
-        self.response_guard.account_id = str(self.user.id)
-        gamble_session.register(self.user.id, asyncio.get_running_loop(),
-                                lambda: gamble_session.reset_session(self))
-
         # Start various tasks and updates
         # self.config_update_checker.start()
         # disabled since unnecessory
@@ -1032,6 +1124,16 @@ class MyClient(commands.Bot):
             await asyncio.sleep(time_to_sleep)
 
         await self.update_config()
+        self._dashboard_initialized = True
+        self.response_guard.connected = self.is_ready()
+        gamble_session.register(self.user.id, asyncio.get_running_loop(),
+                                lambda: gamble_session.reset_session(self))
+        from utils import quick_sale_jobs
+        quick_sale_jobs.register(self._dashboard_account_id, self.username, asyncio.get_running_loop(), self.run_dashboard_sale)
+        self.response_guard.tick()
+
+        if getattr(self, "startup_battles", None) is not None:
+            self._startup_battle_task = asyncio.create_task(self.startup_battles.join(self))
 
         if self.global_settings_dict.offlineStatus:
             self.presence.start()

@@ -149,7 +149,7 @@ def start_owodusk():
         if not global_settings_dict.website.enabled:
             syst.system.console.print("Chưa có tài khoản. Bật website hoặc điền tokens.txt.")
             return
-        syst.system.console.print("Chưa có token. Mở dashboard > Điều khiển > Tài khoản để nhập.")
+        syst.system.console.print("Chưa có token. Mở Tài khoản Discord trên dashboard để nhập.")
         while not tokens_and_channels:
             account_setup.changed.wait(timeout=3)
             account_setup.changed.clear()
